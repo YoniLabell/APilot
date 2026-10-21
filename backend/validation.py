@@ -279,6 +279,9 @@ def verify_ui_numbers(ui: dict, payload: Any, question: str = '', today: date | 
     observed.extend(n for n, _ in _numeric_tokens(question))
     for fact in payload_facts(payload):
         observed.extend(float(fact[k]) for k in ('records', 'min', 'max', 'mean', 'sum') if k in fact)
+    scope = earthquake_scope_count(payload, question)
+    if scope is not None:
+        observed.append(float(scope['matched_count']))
     # Dates are labels, not measurements: a date is accepted if the payload contains it or it is
     # recent enough to be the question's own period ("today", "yesterday", "past week").
     today = today or datetime.now(timezone.utc).date()
