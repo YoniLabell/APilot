@@ -49,7 +49,7 @@ export function ProgressPanel({progress, onCancel}: {progress: Progress; onCance
       ? <ol className="live-feed" ref={feed}>
           {progress.events.map((event, i) => <li key={i}>
             <span className={`stage-chip tone-${STAGE_TONE[event.stage] ?? 'info'}`}>{event.stage}</span>
-            <span className="feed-text">{event.message}{event.detail && <code>{event.detail}</code>}</span>
+            <span className="feed-text">{event.provider && <em className="feed-provider">{event.provider}</em>}{event.message}{event.detail && <code>{event.detail}</code>}</span>
             {event.elapsed !== undefined && <small>{event.elapsed.toFixed(1)}s</small>}
           </li>)}
           {!progress.events.length && <li className="feed-empty">Connecting to the agent…</li>}

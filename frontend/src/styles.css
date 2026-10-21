@@ -657,6 +657,7 @@ kbd {
   white-space: nowrap;
 }
 .feed-empty { color: var(--text-3); }
+.feed-provider { font-style: normal; font-weight: 700; color: var(--accent); margin-right: 6px; }
 .progress-note { display: flex; gap: 8px; align-items: center; margin: 16px 0 0; color: var(--text-3); font-size: 12px; line-height: 1.6; }
 .progress-note svg { flex-shrink: 0; }
 
@@ -690,9 +691,29 @@ kbd {
 .notice div { display: grid; gap: 6px; min-width: 0; }
 .notice b { font-size: 13px; }
 .notice small { color: var(--text-2); line-height: 1.6; overflow-wrap: anywhere; }
-.notice.err { background: var(--bad-soft); border-color: var(--bad-line); }
-.notice.err > svg { color: var(--bad); }
-.notice button { margin-left: auto; flex-shrink: 0; }
+.notice.err { align-items: flex-start; background: var(--bad-soft); border-color: var(--bad-line); }
+.notice.err > svg { margin-top: 1px; color: var(--bad); }
+.notice.err > .icon-btn { margin-top: -6px; }
+.notice > button { margin-left: auto; flex-shrink: 0; }
+.notice .retry { justify-self: start; margin-top: 4px; }
+.technical { margin-top: 2px; font-size: 12px; color: var(--text-2); }
+.technical summary { cursor: pointer; color: var(--text-3); font-weight: 600; }
+.technical summary:hover { color: var(--text); }
+.technical pre {
+  margin: 8px 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--code-bg);
+  font: 11px/1.6 var(--mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.technical ol { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; }
+.technical li { line-height: 1.5; overflow-wrap: anywhere; }
+.technical li .stage-chip { margin-right: 6px; }
+.technical li em { font-style: normal; font-weight: 700; color: var(--text); margin-right: 4px; }
+.technical code { display: block; color: var(--text-3); font: 11px var(--mono); }
 
 /* ---------- Suggestions ---------- */
 .inspire { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; margin: 56px 0 20px; }
@@ -1060,6 +1081,19 @@ tbody tr:hover td { background: var(--row-hover); }
 }
 .popup-footer small { color: var(--text-3); font-size: 11px; }
 .footer-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+
+/* ---------- Footer ---------- */
+.site-footer {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 16px 32px;
+  color: var(--text-3);
+  font-size: 12px;
+}
+.site-footer a { color: var(--text-2); font-weight: 600; }
+.site-footer a:hover { color: var(--accent); }
 
 /* ---------- Toast ---------- */
 .toast {

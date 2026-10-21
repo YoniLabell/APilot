@@ -3,6 +3,11 @@ import type {Answer, TEvent} from '../types'
 /** The server has no streaming endpoint (or a proxy strips it): fall back to the plain request. */
 export class StreamUnavailable extends Error {}
 
+/** A failed question; technical holds the raw reasons, shown only under Technical details. */
+export class AskError extends Error {
+  constructor(message: string, readonly technical = '') { super(message) }
+}
+
 function errorDetail(result: unknown, status: number) {
   const detail = (result as {detail?: unknown})?.detail
   return typeof detail === 'string' ? detail : `Request failed (${status})`
@@ -54,7 +59,7 @@ export async function askStream(body: AskBody, key: string, onTrace: (event: TEv
       const payload = JSON.parse(data)
       if (event === 'trace') onTrace(payload as TEvent)
       else if (event === 'result') return payload as Answer
-      else if (event === 'error') throw Error(errorDetail(payload, 422))
+      else if (event === 'error') throw new AskError(errorDetail(payload, 422), String((payload as {technical?: unknown}).technical ?? ''))
     }
   }
   throw Error('The connection closed before the agent finished. Please try again.')

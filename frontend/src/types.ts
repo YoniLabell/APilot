@@ -1,4 +1,4 @@
-export type TEvent = {stage: string; message: string; detail?: string; elapsed?: number}
+export type TEvent = {stage: string; message: string; detail?: string; elapsed?: number; provider?: string}
 
 export type Stats = {type: 'stats'; title: string; items: {label: string; value: string}[]}
 export type Series = {key: string; label: string; unit?: string}
@@ -24,3 +24,6 @@ export type Saved = {question: string; result: Answer; date: string}
 export type Health = 'loading' | 'ok' | 'unconfigured' | 'offline'
 
 export type Progress = {mode: 'live' | 'estimated'; events: TEvent[]; startedAt: number}
+
+/** A failed question: a short message for people, the raw reasons and steps for Agent X-Ray, and what to retry. */
+export type Failure = {message: string; technical: string; events: TEvent[]; question: string; api: string}

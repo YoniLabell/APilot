@@ -123,6 +123,7 @@ export function ResultModal({answer, question, saved, onClose, onSave, onRefresh
             <div>
               <div className="trace-meta">
                 <span className={`stage-chip tone-${STAGE_TONE[step.stage] ?? 'info'}`}>{step.stage}</span>
+                {step.provider && <span className="meta-chip">{step.provider}</span>}
                 {step.elapsed !== undefined && <small>+{step.elapsed.toFixed(1)}s</small>}
               </div>
               <b>{step.message}</b>
