@@ -47,7 +47,7 @@ APilot is an experimental **English-only** full-stack application powered by Ope
    ```
 6. Open `http://localhost:5173`. The development server proxies `/api` to the backend.
 
-Example question: `How much rain fell in Mexico City yesterday?`
+Example question: `Which earthquakes of magnitude 5 or more happened worldwide in the past week?`
 
 ## Deploy to Render
 
