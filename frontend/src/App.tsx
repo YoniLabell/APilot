@@ -21,6 +21,7 @@ const HEALTH_LABEL: Record<Health, string> = {
 
 export default function App() {
   const [question, setQuestion] = useState('')
+  const [roulettePreview, setRoulettePreview] = useState<{name: string; prompt: string; description: string} | null>(null)
   const [result, setResult] = useState<Answer | null>(null)
   const [answered, setAnswered] = useState('')
   const [progress, setProgress] = useState<Progress | null>(null)
@@ -103,7 +104,8 @@ export default function App() {
       const pick = await api<{name: string; description: string}>('/api/roulette', {headers: {'X-APilot-Key': accessKey}})
       const prompt = `Show interesting real data from the ${pick.name} API. ${pick.description}`
       setQuestion(prompt)
-      void ask(prompt, pick.name)
+      setPanel('explore')
+      setRoulettePreview({name: pick.name, description: pick.description, prompt})
     } catch (e) {
       setPanel('explore')
       setError(e instanceof Error ? e.message : 'Roulette failed')
@@ -147,6 +149,30 @@ export default function App() {
         : <SavedPanel saved={saved} loading={loading} onOpen={item => { setResult(item.result); setAnswered(item.question) }}
             onRefresh={item => refresh(item.question)} onDelete={deleteSaved} onExplore={() => setPanel('explore')}/>}
     </main>
+    {roulettePreview && <div className="overlay" onClick={() => setRoulettePreview(null)}>
+      <div className="popup" role="dialog" aria-modal="true" aria-label="Confirm API Roulette"
+        onClick={e => e.stopPropagation()} style={{maxWidth: '540px'}}>
+        <header className="popup-head">
+          <div className="popup-title"><div><small>API Roulette</small><h2>Ready to explore?</h2></div></div>
+          <button className="icon-btn" aria-label="Close" onClick={() => setRoulettePreview(null)}>✕</button>
+        </header>
+        <div className="popup-body">
+          <p><strong>Selected API:</strong> {roulettePreview.name}</p>
+          <p>{roulettePreview.description}</p>
+          <p><strong>Question to send:</strong></p>
+          <p className="question-label">{roulettePreview.prompt}</p>
+          <p>This exploration sends requests to OpenAI and may use paid API credits. No chargeable request starts until you confirm.</p>
+        </div>
+        <footer className="popup-footer">
+          <button className="secondary-btn" onClick={() => setRoulettePreview(null)}>Cancel</button>
+          <button className="primary-btn" disabled={loading} onClick={() => {
+            const choice = roulettePreview
+            setRoulettePreview(null)
+            if (choice) void ask(choice.prompt, choice.name)
+          }}>Run exploration (uses OpenAI credits)</button>
+        </footer>
+      </div>
+    </div>}
     {result && <ResultModal key={result.retrieved_at + answered} answer={result} question={answered}
       saved={saved.some(s => s.question === answered && s.result.retrieved_at === result.retrieved_at)}
       onClose={() => setResult(null)} onSave={saveResult} onRefresh={() => refresh(answered)} notify={notify}/>}
