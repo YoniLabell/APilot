@@ -22,6 +22,18 @@ APilot is an experimental **English-only** full-stack application powered by Ope
 
 **Scope:** This is a learning-oriented MVP, not a guarantee that any arbitrary API can be used. Many providers have incomplete docs, broken links, rate limits, or nonstandard authentication. Some questions cannot be answered from public API data. The app retries selected providers and reports a failure rather than inventing observations. Generative explanations and chart values are model-created from sampled API data and are **not independently certified**; check source data for high-stakes decisions.
 
+## Verification and failure behavior
+
+APilot uses a **fail-closed** result pipeline. A JSON response is not sufficient proof that an API request worked.
+
+1. Reject `success: false`, `status: error`, deprecation messages, non-JSON responses, and empty result collections.
+2. Ask the analyst model whether the returned data actually covers the requested metric, geography, and period. If not, try another API.
+3. Reject generated dashboard numbers that are absent from the returned JSON (except displayed rounding or exact record counts).
+4. Only then return `verified: true` to the UI. The frontend refuses to display older unverified saved results as live dashboards.
+5. After failed providers, present an error instead of an invented dashboard. Agent X-Ray includes retry reasons.
+
+**Limits:** `verified: true` means the response passed automated provenance checks, not that its measurements are independently audited. Numeric checks can also reject some legitimate transformations and the model can misinterpret complex responses. Real provider acceptance tests are still needed. These stricter checks deliberately prefer false negatives over fabricated dashboards.
+
 ## Run locally
 
 1. Install Python 3.11+, Node.js 20+, and npm.
