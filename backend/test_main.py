@@ -146,3 +146,37 @@ def test_documented_api_links_stop_at_whitespace():
     from main import documented_api_links
     docs='See https://docs.example.com/guide and https://api.example.com/v1/items?a=1&b=2 for details.'
     assert documented_api_links(docs,'text/plain')==('https://api.example.com',)
+
+
+def _explore_with(monkeypatch, dashboards):
+    """Run explore() for a pinned provider with HTTP and both models stubbed; dashboards are returned in turn."""
+    import asyncio, main
+    monkeypatch.setenv('OPENAI_API_KEY', 'test')
+    monkeypatch.delenv('APP_ACCESS_KEY', raising=False)
+    entry = {'name': 'USGS', 'url': 'https://earthquake.usgs.gov/fdsnws/event/1/', 'description': '', 'category': 'Science'}
+    payload = {'features': [{'properties': {'mag': m}} for m in (5.0, 6.4, 5.2)]}
+    async def catalog(): return [entry]
+    async def public_get(url, providers=()): return 'USGS event API documentation with query parameters', 'text/html', url
+    async def get_api_data(*args): return 'https://earthquake.usgs.gov/q', json.dumps(payload), payload
+    prompts = []
+    async def json_model(ai, model, system, prompt, budget=1400):
+        prompts.append(prompt)
+        if system.startswith('Strict analyst'): return {'answerable': True, 'summary': 'Quakes', 'caveat': ''}
+        return dashboards.pop(0)
+    for name, fn in [('catalog', catalog), ('public_get', public_get), ('get_api_data', get_api_data), ('json_model', json_model)]:
+        monkeypatch.setattr(main, name, fn)
+    return asyncio.run(main.explore('Magnitude 5+ earthquakes in the past week?', 'USGS')), prompts
+
+def test_dashboard_with_unsourced_number_is_redesigned_once(monkeypatch):
+    invented = {'title': 'Quakes', 'summary': '192 earthquakes this week.', 'blocks': [{'type': 'text', 'content': 'x'}]}
+    fixed = {'title': 'Quakes', 'summary': '3 earthquakes; strongest 6.4.', 'blocks': [{'type': 'text', 'content': 'x'}]}
+    result, prompts = _explore_with(monkeypatch, [invented, fixed])
+    assert result['verified'] and result['ui']['summary'].startswith('3 earthquakes')
+    assert 'COMPUTED FACTS' in prompts[0] and 'features: 3 records' in prompts[0]
+    assert 'REJECTED: Dashboard contains an unverified number (192)' in prompts[-1]
+    assert any(e['stage'] == 'RETRY' and '192' in e['detail'] for e in result['trace'])
+
+def test_dashboard_still_failing_after_redesign_is_rejected(monkeypatch):
+    invented = {'title': 'Quakes', 'summary': '192 earthquakes this week.', 'blocks': [{'type': 'text', 'content': 'x'}]}
+    with pytest.raises(ValueError, match='unverified number'):
+        _explore_with(monkeypatch, [dict(invented), dict(invented)])

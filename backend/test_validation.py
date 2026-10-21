@@ -97,3 +97,28 @@ def test_number_before_full_stop_is_checked():
 ])
 def test_real_values_and_dates_at_sentence_end_pass(text):
     verify_ui_numbers({'summary': text, 'blocks': []}, RATES, today=TODAY)
+
+
+def _quakes(mags):
+    return {'metadata': {'generated': _ms(2026, 10, 21), 'count': len(mags)}, 'features': [
+        {'properties': {'mag': m, 'place': f'Place {i}', 'time': _ms(2026, 10, 14 + i)}, 'geometry': {'coordinates': [10.1, -5.2, 35.0]}}
+        for i, m in enumerate(mags)]}
+
+
+def test_payload_facts_count_and_aggregate_the_full_response():
+    from validation import payload_facts
+    facts = payload_facts(_quakes([5.0, 6.4, 5.2]))
+    assert {'collection': 'features', 'records': 3} in facts
+    mag = next(f for f in facts if f.get('field') == 'properties.mag')
+    assert (mag['min'], mag['max'], mag['mean'], mag['sum']) == (5.0, 6.4, 5.5333, 16.6)
+    assert not any(f.get('field', '').endswith('time') for f in facts)  # timestamps are dates, not measurements
+    rain = payload_facts({'daily': {'precipitation_sum': [0.0, 1.2, 3.0]}})
+    assert rain == [{'collection': 'daily.precipitation_sum', 'records': 3, 'field': '', 'min': 0.0, 'max': 3.0, 'mean': 1.4, 'sum': 4.2}]
+
+
+def test_derived_counts_and_averages_pass_but_invented_counts_do_not():
+    quakes = _quakes([5.0, 6.4, 5.2])
+    verify_ui_numbers({'summary': '3 earthquakes; average magnitude 5.53, strongest 6.4. Total rain 4.2 mm.', 'blocks': []},
+                      {**quakes, 'daily': {'rain': [0.0, 1.2, 3.0]}}, today=TODAY)
+    with pytest.raises(ValueError, match=r'unverified number \(192\)'):
+        verify_ui_numbers({'summary': '192 earthquakes of magnitude 5+ this week.', 'blocks': []}, quakes, today=TODAY)

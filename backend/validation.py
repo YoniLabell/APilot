@@ -99,6 +99,64 @@ def _source_numbers(value: Any, bag: list[float], depth: int = 0) -> None:
         except ValueError: pass
 
 
+def _flatten(record: dict, prefix: str = '', depth: int = 0) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for key, value in record.items():
+        name = f'{prefix}{key}'
+        if isinstance(value, dict) and depth < 2: out.update(_flatten(value, name + '.', depth + 1))
+        elif not isinstance(value, (dict, list)): out[name] = value
+    return out
+
+
+def _collections(value: Any, path: str = '', depth: int = 0) -> list[tuple[str, list]]:
+    if depth > 6: return []
+    if isinstance(value, list):
+        if value and (all(isinstance(v, dict) for v in value[:50]) or all(_is_number(v) for v in value[:50])):
+            return [(path or 'records', value)]
+        return []
+    if isinstance(value, dict):
+        return [c for k, v in value.items() for c in _collections(v, f'{path}.{k}' if path else str(k), depth + 1)]
+    return []
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def _stats(values: list[float]) -> dict[str, float]:
+    return {'min': min(values), 'max': max(values), 'mean': round(sum(values) / len(values), 4), 'sum': round(sum(values), 4)}
+
+
+def payload_facts(payload: Any) -> list[dict]:
+    """Exact counts and aggregates over the FULL response, computed by code.
+
+    The models only see a truncated sample, so a count or average they work out themselves is a guess.
+    These facts are given to them instead, and verify_ui_numbers accepts them.
+    """
+    facts: list[dict] = []
+    for path, items in _collections(payload)[:10]:
+        if all(_is_number(v) for v in items):
+            facts.append({'collection': path, 'records': len(items), 'field': '', **_stats([float(v) for v in items])})
+            continue
+        records = [_flatten(r) for r in items if isinstance(r, dict)]
+        facts.append({'collection': path, 'records': len(items)})
+        fields = {k for r in records for k in r}
+        for field in sorted(fields)[:40]:
+            if TIME_KEY.search(field.rsplit('.', 1)[-1]): continue  # Timestamps are checked as dates.
+            values = [float(r[field]) for r in records if _is_number(r.get(field))]
+            if len(values) >= 2: facts.append({'collection': path, 'records': len(items), 'field': field, **_stats(values)})
+    return facts[:60]
+
+
+def describe_facts(facts: list[dict]) -> str:
+    lines = []
+    for f in facts:
+        where = f"{f['collection']}{'.' + f['field'] if f.get('field') else ''}"
+        if 'min' in f: lines.append(f"{where}: min {f['min']:g}, max {f['max']:g}, mean {f['mean']:g}, sum {f['sum']:g} ({f['records']} records)")
+        else: lines.append(f"{where}: {f['records']} records")
+    return '\n'.join(lines) or 'none'
+
+
 def _numeric_tokens(value: str) -> list[tuple[float, int]]:
     out = []
     for m in NUMBER.finditer(value):
@@ -170,6 +228,8 @@ def verify_ui_numbers(ui: dict, payload: Any, question: str = '', today: date | 
     observed: list[float] = []
     _source_numbers(payload, observed)
     observed.extend(n for n, _ in _numeric_tokens(question))
+    for fact in payload_facts(payload):
+        observed.extend(float(fact[k]) for k in ('records', 'min', 'max', 'mean', 'sum') if k in fact)
     # Dates are labels, not measurements: a date is accepted if the payload contains it or it is
     # recent enough to be the question's own period ("today", "yesterday", "past week").
     today = today or datetime.now(timezone.utc).date()

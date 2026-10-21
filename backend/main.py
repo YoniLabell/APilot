@@ -19,7 +19,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from validation import validate_api_payload, verify_ui_numbers
+from validation import describe_facts, payload_facts, validate_api_payload, verify_ui_numbers
 
 CATALOG_URL = 'https://raw.githubusercontent.com/public-apis/public-apis/master/README.md'
 AGENT_MODEL = os.getenv('AGENT_MODEL', 'gpt-4.1-mini')
@@ -341,27 +341,43 @@ async def explore(question: str, preferred: str='', listener=None) -> dict:
                 docs += '\nEXPLICIT DOCUMENTED API HOSTS: '+', '.join(api_origins)
             if len(docs)<45: raise ValueError('Documentation missing or unreadable')
             url,data,payload=await get_api_data(ai,entry,docs,question,trace,(entry['url'],docs_url,*api_origins))
+            # The models only see a sample of the JSON, so counts and aggregates come from code.
+            computed=describe_facts(payload_facts(payload))
+            log(trace,'ANALYSIS','Computed exact record counts and aggregates from the full response',computed)
             log(trace,'ANALYSIS','LLM analyzes actual response and provenance')
             facts=await json_model(ai,AGENT_MODEL,
                 'Strict analyst: Answer in ENGLISH ONLY. Use only supplied JSON; never fabricate numbers. Distinguish forecasts and observations. '
+                'ACTUAL JSON may be a truncated sample: for counts, totals, averages, minimums and maximums use COMPUTED FACTS, '
+                'which code computed exactly from the full response; never count or compute them yourself. '
                 'If a date, location, unit or measurement reliability is uncertain, explain it. Return JSON: answerable (boolean),title,summary,key_facts (list of label/value/evidence),caveat. '
                 'Set answerable=false unless this exact API response contains enough records for the requested geography, measurement and date range. Do not substitute forecasts for historical observations. Never fill missing values with general knowledge.',
-                f'Question: {question}\nAPI: {entry["name"]}\nSource: {url}\nACTUAL JSON:\n{data[:14500]}',2200)
+                f'Question: {question}\nAPI: {entry["name"]}\nSource: {url}\nCOMPUTED FACTS:\n{computed[:3000]}\nACTUAL JSON:\n{data[:14500]}',2200)
             if facts.get('answerable') is not True:
                 raise ValueError('Retrieved JSON does not answer the requested location, metric or period')
             log(trace,'UI GENERATION','Second LLM designs the custom dashboard JSON')
-            view=await json_model(ai,UI_MODEL,
-                'Create visually useful ENGLISH-ONLY dashboard schema, NOT HTML/JS. ONLY use numbers directly present in supplied JSON, or exact returned-record counts. '
-                'Never invent a time series. JSON: title,subtitle,summary,caveat,blocks. '
-                'Blocks: stats {type,title,items:[{label,value}]}; chart {type,title,chartType:line|bar,xKey,series:[{key,label,unit}],data:[{...}]} with plain numbers in data; '
-                'table {type,title,columns:[string],rows:[[string]]}; text {type,title,content}. '
-                'Choose charts only if multiple actual numeric records exist; otherwise use stats,text,table.',
-                f'Question: {question}\nANALYSIS: {json.dumps(facts,ensure_ascii=False)[:5000]}\nACTUAL JSON: {data[:8000]}',2500)
-            ui=clean_ui(view)
-            if not ui['summary']: ui['summary']=str(facts.get('summary',''))[:1700]
-            if not ui['caveat']: ui['caveat']=str(facts.get('caveat',''))[:700]
-            if not ui['blocks']: raise ValueError('Model produced no usable data visualization')
-            verify_ui_numbers(ui,payload,question)
+            ui_prompt=(f'Question: {question}\nANALYSIS: {json.dumps(facts,ensure_ascii=False)[:5000]}\n'
+                       f'COMPUTED FACTS:\n{computed[:3000]}\nACTUAL JSON: {data[:8000]}')
+            rejected=''
+            for repair in range(2):  # One redesign if the verifier finds an unsourced figure.
+                view=await json_model(ai,UI_MODEL,
+                    'Create visually useful ENGLISH-ONLY dashboard schema, NOT HTML/JS. ONLY use numbers directly present in supplied JSON or in COMPUTED FACTS '
+                    '(exact counts, totals, averages, minimums and maximums over the full response). Never count or compute figures yourself. '
+                    'Never invent a time series. JSON: title,subtitle,summary,caveat,blocks. '
+                    'Blocks: stats {type,title,items:[{label,value}]}; chart {type,title,chartType:line|bar,xKey,series:[{key,label,unit}],data:[{...}]} with plain numbers in data; '
+                    'table {type,title,columns:[string],rows:[[string]]}; text {type,title,content}. '
+                    'Choose charts only if multiple actual numeric records exist; otherwise use stats,text,table.',
+                    ui_prompt+(f'\nYOUR PREVIOUS DASHBOARD WAS REJECTED: {rejected}. Remove that figure or replace it with a value from ACTUAL JSON or COMPUTED FACTS.' if rejected else ''),2500)
+                ui=clean_ui(view)
+                if not ui['summary']: ui['summary']=str(facts.get('summary',''))[:1700]
+                if not ui['caveat']: ui['caveat']=str(facts.get('caveat',''))[:700]
+                if not ui['blocks']: raise ValueError('Model produced no usable data visualization')
+                try:
+                    verify_ui_numbers(ui,payload,question)
+                    break
+                except ValueError as exc:
+                    if repair: raise
+                    rejected=str(exc)
+                    log(trace,'RETRY','Dashboard figure not found in the data; redesigning',rejected)
             log(trace,'VALIDATION','Checked response flags and dashboard figures against returned JSON')
             log(trace,'DONE','Generated sourced interactive dashboard')
             return {'verified':True,'ui':ui,'provider':entry,'source_url':url,'raw_excerpt':data[:12500],
