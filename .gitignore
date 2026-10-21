@@ -1,0 +1,17 @@
+# Private configuration
+.env
+.env.*
+!.env.example
+# Python
+__pycache__/
+.pytest_cache/
+*.py[cod]
+.venv/
+# Node
+node_modules/
+frontend/dist/
+backend/static/
+# Editors
+.idea/
+.vscode/
+.DS_Store

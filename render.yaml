@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: apilot
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: AGENT_MODEL
+        value: gpt-4.1-mini
+      - key: UI_MODEL
+        value: gpt-4.1-mini
+      - key: APP_ACCESS_KEY
+        generateValue: true
