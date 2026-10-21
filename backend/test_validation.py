@@ -122,3 +122,21 @@ def test_derived_counts_and_averages_pass_but_invented_counts_do_not():
                       {**quakes, 'daily': {'rain': [0.0, 1.2, 3.0]}}, today=TODAY)
     with pytest.raises(ValueError, match=r'unverified number \(192\)'):
         verify_ui_numbers({'summary': '192 earthquakes of magnitude 5+ this week.', 'blocks': []}, quakes, today=TODAY)
+
+
+QUAKE_TEXT = {'features': [
+    {'properties': {'mag': 5.4, 'place': '81 km SW of Port-Vila, Vanuatu'}, 'geometry': {'coordinates': [167.8, -18.3, 35.0]}},
+    {'properties': {'mag': 6.1, 'place': 'Kermadec Islands region'}, 'geometry': {'coordinates': [-178.1, -29.9, 10.0]}}]}
+
+
+@pytest.mark.parametrize('text', [
+    'Strongest nearby: M 5.4, 81 km SW of Port-Vila.',  # Regression: "unverified number (81)" on the deployed app.
+    'Average depth 22.5 km.',                           # Mean of coordinates[2] across events.
+])
+def test_numbers_inside_payload_text_and_coordinate_facts_pass(text):
+    verify_ui_numbers({'summary': text, 'blocks': []}, QUAKE_TEXT, today=TODAY)
+
+
+def test_rejection_names_where_the_number_appeared():
+    with pytest.raises(ValueError, match=r'unverified number \(140\) in "A quake 140 km from Tonga'):
+        verify_ui_numbers({'summary': 'A quake 140 km from Tonga reached M 7.2.', 'blocks': []}, QUAKE_TEXT, today=TODAY)
