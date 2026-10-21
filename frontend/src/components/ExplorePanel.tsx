@@ -1,16 +1,18 @@
 import {useState, type FormEvent} from 'react'
-import {Activity, ArrowRight, BookOpen, ChevronRight, CloudRain, Eye, EyeOff, FileJson, Globe2, KeyRound,
-  LoaderCircle, ShieldCheck, Shuffle, Sparkles, Terminal, TriangleAlert, X} from 'lucide-react'
+import {Activity, ArrowRight, Banknote, BookOpen, ChevronRight, Eye, EyeOff, FileJson, KeyRound,
+  LoaderCircle, ShieldCheck, Shuffle, Sparkles, Star, Terminal, TriangleAlert, X} from 'lucide-react'
 import type {Progress} from '../types'
 import {ProgressPanel} from './ProgressPanel'
 
 // Each example is pinned to a stable no-auth API (an exact catalog name) so it skips the
 // keyword-ranking step, where the right provider can lose a tie to dozens of similar ones.
+// All four were verified end to end on the deployed app. Avoid Open-Meteo (the agent builds
+// invalid requests) and crypto/SpaceX providers (wrong provider picked, 403s).
 const EXAMPLES = [
-  {icon: CloudRain, label: 'Weather', api: 'Open-Meteo', q: 'How much rain fell in Mexico City yesterday?'},
   {icon: Activity, label: 'Science', api: 'USGS Earthquake Hazards Program', q: 'Which earthquakes of magnitude 5 or more happened worldwide in the past week?'},
-  {icon: Globe2, label: 'World Data', api: 'REST Countries', q: 'Compare the populations of Japan, India and Brazil'},
   {icon: BookOpen, label: 'Books', api: 'Open Library', q: 'List 10 Isaac Asimov books with their first publication years'},
+  {icon: Star, label: 'Developers', api: 'GithubTrends', q: 'What are the 5 most-starred Python repositories on GitHub?'},
+  {icon: Banknote, label: 'Finance', api: 'Frankfurter', q: "What is today's US dollar exchange rate against EUR, GBP and JPY?"},
 ]
 
 type Props = {
@@ -51,7 +53,7 @@ export function ExplorePanel(props: Props) {
     <form className={loading ? 'ask-box busy' : 'ask-box'} onSubmit={(e: FormEvent) => { e.preventDefault(); onAsk() }}>
       <label className="ask-label" htmlFor="question"><Sparkles size={16}/> Ask a question</label>
       <textarea id="question" rows={3} maxLength={700} value={question} disabled={loading}
-        onChange={e => setQuestion(e.target.value)} placeholder="For example: How much did it rain in Mexico City yesterday?"
+        onChange={e => setQuestion(e.target.value)} placeholder="For example: Which earthquakes of magnitude 5 or more happened worldwide in the past week?"
         onKeyDown={e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); onAsk() } }}/>
       <div className="ask-bottom">
         <small><ShieldCheck size={15}/> Real data, traceable sources</small>
