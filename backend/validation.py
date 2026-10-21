@@ -331,6 +331,8 @@ def audit_dashboard(ui: dict, payload: Any, question: str = '') -> list[str]:
             warnings.append(message[:240])
 
     def count_label(text: str) -> bool:
+        if re.search(r'magnitude|strongest|weakest|largest|smallest|maximum|minimum|average|mean|depth|distance|latitude|longitude|date|year|time', text, re.I):
+            return False
         return bool(re.search(r'earthquakes?|quakes?|events?|number of|total|count', text, re.I))
 
     def correct_scope_count(value: str, label: str) -> str:
@@ -351,6 +353,73 @@ def audit_dashboard(ui: dict, payload: Any, question: str = '') -> list[str]:
         # For narrative sentences, only numbers directly preceding a count noun
         # are considered totals; magnitude, date and depth figures remain intact.
         def replace(m: re.Match) -> str:
+            # "Magnitude 6 earthquake" is not a six-event count.
+            prefix = value[max(0, m.start() - 16):m.start()]
+            if re.search(r'(?:magnitude|mag|M)\s*
+            actual = int(scope['matched_count'])
+            if stated != actual:
+                warning(f"Corrected a magnitude >= {scope['minimum_magnitude']:g} earthquake count "
+                        f"from {stated} to {actual} using the returned feature records.")
+            return str(actual) + m[2]
+        return re.sub(r'\b(\d[\d,]*)((?:\s+|\s+M\d+(?:\.\d+)?\+\s+)(?:earthquakes?|quakes?|events?))\b',
+                      replace, value, flags=re.I)
+
+    def checked(value: str, label: str, fallback: str = 'Unverified') -> str:
+        value = correct_scope_count(str(value), label)
+        try:
+            verify_ui_numbers({'summary': value, 'blocks': []}, payload, question)
+        except ValueError as exc:
+            warning(f"{label}: {str(exc)[:140]}; the figure was hidden.")
+            return fallback
+        return value
+
+    ui['title'] = checked(str(ui.get('title') or ''), 'Title', 'Data Explorer')
+    for field in ('subtitle', 'summary', 'caveat'):
+        value = str(ui.get(field) or '')
+        if value:
+            ui[field] = checked(value, field.title(),
+                                'Some generated figures could not be verified against the API response.' if field == 'summary' else '')
+    original = ui.get('blocks', [])
+    cleaned = []
+    for block in original:
+        kind = block.get('type')
+        if kind == 'stats':
+            for item in block.get('items', []):
+                item['value'] = checked(str(item.get('value') or ''), str(item.get('label') or 'Statistic'))
+            cleaned.append(block)
+        elif kind == 'table':
+            columns = block.get('columns', [])
+            for row in block.get('rows', []):
+                for index, cell in enumerate(row):
+                    label = columns[index] if index < len(columns) else 'Table value'
+                    row[index] = checked(str(cell), str(label))
+            cleaned.append(block)
+        elif kind == 'chart':
+            if scope is not None and any(count_label(str(series.get('label') or ''))
+                                         for series in block.get('series', [])):
+                warning('Grouped earthquake-count chart was hidden because group totals were not computed from source records.')
+                continue
+            # Arbitrary chart aggregates are not blindly approved. Remove a chart
+            # if even one plotted measurement cannot be tied to source data.
+            valid = True
+            for row in block.get('data', []):
+                for series in block.get('series', []):
+                    key = series.get('key')
+                    if key in row and checked(str(row[key]), str(series.get('label') or 'Chart measurement')) == 'Unverified':
+                        valid = False
+            if valid:
+                cleaned.append(block)
+            else:
+                warning(f"Chart '{block.get('title') or 'Untitled'}' was hidden because its values could not be verified.")
+        elif kind == 'text':
+            block['content'] = checked(str(block.get('content') or ''), str(block.get('title') or 'Text'))
+            cleaned.append(block)
+    ui['blocks'] = cleaned or [{'type': 'text', 'title': 'Source data retrieved',
+                                 'content': 'The source returned data, but no generated figures passed automated checks. '
+                                            'Open Raw JSON or the source URL to inspect the response.'}]
+    return warnings
+, prefix, re.I):
+                return m.group(0)
             stated = int(m[1].replace(',', ''))
             actual = int(scope['matched_count'])
             if stated != actual:
@@ -391,6 +460,10 @@ def audit_dashboard(ui: dict, payload: Any, question: str = '') -> list[str]:
                     row[index] = checked(str(cell), str(label))
             cleaned.append(block)
         elif kind == 'chart':
+            if scope is not None and any(count_label(str(series.get('label') or ''))
+                                         for series in block.get('series', [])):
+                warning('Grouped earthquake-count chart was hidden because group totals were not computed from source records.')
+                continue
             # Arbitrary chart aggregates are not blindly approved. Remove a chart
             # if even one plotted measurement cannot be tied to source data.
             valid = True
