@@ -191,3 +191,13 @@ def test_scaled_values_and_request_parameters_pass(text):
 def test_scaled_values_that_do_not_match_are_rejected(text):
     with pytest.raises(ValueError, match='unverified number'):
         verify_ui_numbers({'summary': text, 'blocks': []}, WORLD_BANK, 'GDP of Israel', today=TODAY)
+
+
+def test_magnitude_before_earthquake_is_not_treated_as_a_count():
+    """Regression: this line was corrupted on main (a "$'" text-replace artifact) and broke the module."""
+    from validation import audit_dashboard
+    payload = {'features': [{'properties': {'mag': 6.0, 'place': 'Tonga'}}, {'properties': {'mag': 5.2, 'place': 'Chile'}}]}
+    ui = {'title': 'Quakes', 'summary': 'A magnitude 6 earthquake struck Tonga; 2 earthquakes in total.', 'caveat': '', 'blocks': []}
+    warnings = audit_dashboard(ui, payload, 'Which earthquakes of magnitude 5 or more happened in the past week?')
+    assert 'magnitude 6 earthquake' in ui['summary'] and '2 earthquakes' in ui['summary']
+    assert not any('Corrected' in w for w in warnings)

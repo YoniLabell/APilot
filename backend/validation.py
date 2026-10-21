@@ -315,6 +315,9 @@ def verify_ui_numbers(ui: dict, payload: Any, question: str = '', today: date | 
     observed.extend(n for n, _ in _numeric_tokens(question))
     for fact in payload_facts(payload):
         observed.extend(float(fact[k]) for k in ('records', 'min', 'max', 'mean', 'sum') if k in fact)
+    scope = earthquake_scope_count(payload, question)
+    if scope is not None:
+        observed.append(float(scope['matched_count']))
     # Values are often shown scaled: 136410000000 as "$136.4B", 0.0523 as "5.2%". Matching still
     # uses the precision the dashboard displays, so this is no looser than showing the raw value.
     scaled = [s / k for s in observed for k in (1e3, 1e6, 1e9, 1e12) if abs(s) >= k]
@@ -370,10 +373,13 @@ def audit_dashboard(ui: dict, payload: Any, question: str = '') -> list[str]:
             warnings.append(message[:240])
 
     def count_label(text: str) -> bool:
+        if re.search(r'magnitude|strongest|weakest|largest|smallest|maximum|minimum|average|mean|depth|distance|latitude|longitude|date|year|time', text, re.I):
+            return False
         return bool(re.search(r'earthquakes?|quakes?|events?|number of|total|count', text, re.I))
 
     def correct_scope_count(value: str, label: str) -> str:
-        if scope is None or not (count_label(label) or count_label(value)):
+        count_phrase = re.search(r'\b\d[\d,]*\s+(?:earthquakes?|quakes?|events?)\b', value, re.I)
+        if scope is None or not (count_label(label) or count_phrase):
             return value
         if re.search(r'all magnitudes|unfiltered|regardless of magnitude', label + ' ' + value, re.I):
             return value
@@ -390,6 +396,10 @@ def audit_dashboard(ui: dict, payload: Any, question: str = '') -> list[str]:
         # For narrative sentences, only numbers directly preceding a count noun
         # are considered totals; magnitude, date and depth figures remain intact.
         def replace(m: re.Match) -> str:
+            # "Magnitude 6 earthquake" is not a six-event count.
+            prefix = value[max(0, m.start() - 16):m.start()]
+            if re.search(r'(?:magnitude|mag|M)\s*$', prefix, re.I):
+                return m.group(0)
             stated = int(m[1].replace(',', ''))
             actual = int(scope['matched_count'])
             if stated != actual:
@@ -430,6 +440,10 @@ def audit_dashboard(ui: dict, payload: Any, question: str = '') -> list[str]:
                     row[index] = checked(str(cell), str(label))
             cleaned.append(block)
         elif kind == 'chart':
+            if scope is not None and any(count_label(str(series.get('label') or ''))
+                                         for series in block.get('series', [])):
+                warning('Grouped earthquake-count chart was hidden because group totals were not computed from source records.')
+                continue
             # Arbitrary chart aggregates are not blindly approved. Remove a chart
             # if even one plotted measurement cannot be tied to source data.
             valid = True
