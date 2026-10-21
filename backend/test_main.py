@@ -141,3 +141,8 @@ def test_agent_gives_up_after_bounded_rounds(fake_web):
     with pytest.raises(ValueError,match='no valid JSON'):
         asyncio.run(main.get_api_data(agent,{'name':'X','url':'https://example.com/'},'docs','q?',main.Trace(),('https://example.com/',)))
     assert len(agent.seen)==main.AGENT_ROUNDS
+
+def test_documented_api_links_stop_at_whitespace():
+    from main import documented_api_links
+    docs='See https://docs.example.com/guide and https://api.example.com/v1/items?a=1&b=2 for details.'
+    assert documented_api_links(docs,'text/plain')==('https://api.example.com',)

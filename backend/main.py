@@ -152,7 +152,7 @@ def readable(body: str, content_type: str, limit: int = 16000) -> str:
 
 def documented_api_links(body: str, content_type: str) -> tuple[str,...]:
     """Collect API hosts linked from docs. public_get still enforces HTTPS, DNS and GET-only."""
-    found = re.findall(r'https://[A-Za-z0-9._~:/?#\[\]@!def terms(text: str) -> set[str]:()*+,;=%-]+',body[:250000])
+    found = re.findall(r"https://[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+",body[:250000])
     if 'html' in content_type:
         soup=BeautifulSoup(body[:250000],'html.parser')
         found.extend(a.get('href','') for a in soup.select('a[href]')[:600])
