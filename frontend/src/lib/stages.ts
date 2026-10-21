@@ -17,12 +17,10 @@ const STAGE_OF_EVENT: Record<string, number> = {
   ANALYSIS: 3, 'UI GENERATION': 4, DONE: STAGES.length,
 }
 
+/** The furthest stage reached. Two providers can run at once, so the latest event alone would jump back and forth. */
 export function liveStage(events: TEvent[]) {
-  for (let i = events.length - 1; i >= 0; i--) {
-    const stage = STAGE_OF_EVENT[events[i].stage]
-    if (stage !== undefined) return stage
-  }
-  return 0
+  return events.reduce((stage, event) =>
+    event.stage === 'FALLBACK' ? stage : Math.max(stage, STAGE_OF_EVENT[event.stage] ?? 0), 0)
 }
 
 export function estimatedStage(elapsedSeconds: number) {

@@ -1,7 +1,7 @@
 import {useCallback, useEffect, useRef, useState} from 'react'
 import {Menu} from 'lucide-react'
-import type {Answer, Health, Progress, Saved} from './types'
-import {api, ask as askPlain, askStream, StreamUnavailable} from './lib/api'
+import type {Answer, Failure, Health, Progress, Saved, TEvent} from './types'
+import {api, ask as askPlain, AskError, askStream, StreamUnavailable} from './lib/api'
 import {local, readJSON, readText, session, write} from './lib/storage'
 import {Sidebar, type Panel} from './components/Sidebar'
 import {ExplorePanel} from './components/ExplorePanel'
@@ -25,7 +25,7 @@ export default function App() {
   const [result, setResult] = useState<Answer | null>(null)
   const [answered, setAnswered] = useState('')
   const [progress, setProgress] = useState<Progress | null>(null)
-  const [error, setError] = useState('')
+  const [failure, setFailure] = useState<Failure | null>(null)
   const [accessKey, setAccessKeyState] = useState(() => readText(session, ACCESS_KEY))
   const [protectedApi, setProtectedApi] = useState(false)
   const [health, setHealth] = useState<Health>('loading')
@@ -68,18 +68,21 @@ export default function App() {
   async function ask(text = question, forcedApi = '') {
     const trimmed = text.trim()
     if (loading || trimmed.length < 4) return
-    setError('')
+    setFailure(null)
     setResult(null)
     setPanel('explore')
     const abort = new AbortController()
     controller.current = abort
     const body = {question: trimmed, forced_api: forcedApi}
+    const events: TEvent[] = []  // Kept for Technical details if the question fails.
     setProgress({mode: 'live', events: [], startedAt: Date.now()})
     try {
       let answer: Answer
       try {
-        answer = await askStream(body, accessKey, event =>
-          setProgress(p => p && {...p, events: [...p.events, event]}), abort.signal)
+        answer = await askStream(body, accessKey, event => {
+          events.push(event)
+          setProgress(p => p && {...p, events: [...p.events, event]})
+        }, abort.signal)
       } catch (e) {
         if (!(e instanceof StreamUnavailable)) throw e
         setProgress(p => p && {...p, mode: 'estimated'})
@@ -89,7 +92,11 @@ export default function App() {
       setResult(answer)
     } catch (e) {
       if (abort.signal.aborted) notify('Exploration cancelled')
-      else setError(e instanceof Error ? e.message : 'Unexpected error')
+      else setFailure({
+        message: e instanceof Error ? e.message : 'Unexpected error',
+        technical: e instanceof AskError ? e.technical : '',
+        events, question: trimmed, api: forcedApi,
+      })
     } finally {
       controller.current = null
       setProgress(null)
@@ -100,7 +107,7 @@ export default function App() {
     setMenu(false)
     if (loading) return
     try {
-      setError('')
+      setFailure(null)
       const pick = await api<{name: string; description: string}>('/api/roulette', {headers: {'X-APilot-Key': accessKey}})
       const prompt = `Show interesting real data from the ${pick.name} API. ${pick.description}`
       setQuestion(prompt)
@@ -108,7 +115,7 @@ export default function App() {
       setRoulettePreview({name: pick.name, description: pick.description, prompt})
     } catch (e) {
       setPanel('explore')
-      setError(e instanceof Error ? e.message : 'Roulette failed')
+      setFailure({message: e instanceof Error ? e.message : 'Roulette failed', technical: '', events: [], question: '', api: ''})
     }
   }
 
@@ -144,10 +151,16 @@ export default function App() {
       </header>
       {panel === 'explore'
         ? <ExplorePanel question={question} setQuestion={setQuestion} accessKey={accessKey} setAccessKey={setAccessKey}
-            protectedApi={protectedApi} loading={loading} progress={progress} error={error} onDismissError={() => setError('')}
+            protectedApi={protectedApi} loading={loading} progress={progress} failure={failure} onDismissError={() => setFailure(null)}
+            onRetry={() => failure && void ask(failure.question, failure.api)}
             onAsk={(text, api) => void ask(text, api)} onCancel={() => controller.current?.abort()} onRoulette={() => void roulette()}/>
         : <SavedPanel saved={saved} loading={loading} onOpen={item => { setResult(item.result); setAnswered(item.question) }}
             onRefresh={item => refresh(item.question)} onDelete={deleteSaved} onExplore={() => setPanel('explore')}/>}
+      <footer className="site-footer">
+        Built by <a href="https://github.com/YoniLabell" target="_blank" rel="noopener noreferrer">Yoni Labell</a>
+        <span aria-hidden="true">·</span>
+        <a href="https://github.com/YoniLabell/APilot" target="_blank" rel="noopener noreferrer">Source on GitHub</a>
+      </footer>
     </main>
     {roulettePreview && <div className="overlay" onClick={() => setRoulettePreview(null)}>
       <div className="popup" role="dialog" aria-modal="true" aria-label="Confirm API Roulette"

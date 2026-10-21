@@ -1,7 +1,8 @@
 import {useState, type FormEvent} from 'react'
 import {Activity, ArrowRight, Banknote, BookOpen, ChevronRight, Eye, EyeOff, FileJson, KeyRound,
-  LoaderCircle, ShieldCheck, Shuffle, Sparkles, Star, Terminal, TriangleAlert, X} from 'lucide-react'
-import type {Progress} from '../types'
+  LoaderCircle, RotateCcw, ShieldCheck, Shuffle, Sparkles, Star, Terminal, TriangleAlert, X} from 'lucide-react'
+import type {Failure, Progress} from '../types'
+import {STAGE_TONE} from '../lib/stages'
 import {ProgressPanel} from './ProgressPanel'
 
 // Each example is pinned to a stable no-auth API (an exact catalog name) so it skips the
@@ -23,7 +24,8 @@ type Props = {
   protectedApi: boolean
   loading: boolean
   progress: Progress | null
-  error: string
+  failure: Failure | null
+  onRetry: () => void
   onDismissError: () => void
   onAsk: (text?: string, api?: string) => void
   onCancel: () => void
@@ -31,7 +33,7 @@ type Props = {
 }
 
 export function ExplorePanel(props: Props) {
-  const {question, setQuestion, accessKey, setAccessKey, protectedApi, loading, progress, error, onAsk} = props
+  const {question, setQuestion, accessKey, setAccessKey, protectedApi, loading, progress, failure, onAsk} = props
   const [showKey, setShowKey] = useState(false)
   const ready = question.trim().length >= 4
 
@@ -68,9 +70,21 @@ export function ExplorePanel(props: Props) {
 
     {progress && <ProgressPanel progress={progress} onCancel={props.onCancel}/>}
 
-    {error && <div className="notice err" role="alert">
+    {failure && <div className="notice err" role="alert">
       <TriangleAlert size={20}/>
-      <div><b>Could not complete this request</b><small>{error}</small></div>
+      <div>
+        <b>Could not complete this request</b>
+        <small>{failure.message}</small>
+        {(failure.technical || failure.events.length > 0) && <details className="technical">
+          <summary>Technical details (Agent X-Ray)</summary>
+          {failure.technical && <pre>{failure.technical}</pre>}
+          <ol>{failure.events.map((event, i) => <li key={i}>
+            <span className={`stage-chip tone-${STAGE_TONE[event.stage] ?? 'info'}`}>{event.stage}</span>
+            {event.provider && <em>{event.provider}</em>} {event.message}{event.detail && <code>{event.detail}</code>}
+          </li>)}</ol>
+        </details>}
+        {failure.question && <button className="secondary-btn retry" onClick={props.onRetry} disabled={loading}><RotateCcw size={15}/> Try again</button>}
+      </div>
       <button className="icon-btn" onClick={props.onDismissError} aria-label="Dismiss error"><X size={18}/></button>
     </div>}
 
