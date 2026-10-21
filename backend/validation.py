@@ -4,12 +4,25 @@ from __future__ import annotations
 import json
 import math
 import re
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 DATA_KEYS = frozenset({'data', 'results', 'result', 'records', 'items', 'features', 'observations', 'entries'})
 META_KEYS = frozenset({'success', 'ok', 'status', 'message', 'error', 'errors', 'code', 'detail', 'pagination', 'links', 'meta', 'metadata', 'timestamp', 'api_version', 'version'})
 ERROR_STATUS = frozenset({'error', 'failed', 'failure', 'deprecated', 'unauthorized', 'forbidden', 'not_found'})
 BAD_MESSAGE = re.compile(r'(deprecated|no longer (available|supported)|invalid api|api key required|unauthori[sz]ed|endpoint not found|not found|rate limit exceeded)', re.I)
+MONTH = (r'(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|'
+         r'sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?')
+MONTHS = {m: i for i, m in enumerate(('jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'), 1)}
+DATE_PATTERNS = (  # Each yields (kind, regex); groups are read by _dates_in.
+    ('iso', re.compile(r'(?<![\w.])(\d{4})-(\d{1,2})-(\d{1,2})(?:[T ]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?![\w.])')),
+    ('mdy', re.compile(r'\b' + MONTH + r'\s+(\d{1,2})(?:st|nd|rd|th)?(?:\s*[-\u2013\u2014]\s*(\d{1,2})(?:st|nd|rd|th)?)?(?:,?\s+(\d{4}))?(?![\w.])', re.I)),
+    ('dmy', re.compile(r'(?<![\w.])(\d{1,2})(?:st|nd|rd|th)?\s+' + MONTH + r'(?:,?\s+(\d{4}))?(?![\w.])', re.I)),
+    ('my', re.compile(r'\b' + MONTH + r',?\s+(\d{4})(?![\w.])', re.I)),
+    ('slash', re.compile(r'(?<![\w.])(\d{1,2})[/.](\d{1,2})[/.](\d{4})(?![\w.])')),
+    ('time', re.compile(r'(?<![\w.])\d{1,2}:\d{2}(?::\d{2})?(?:\s?[ap]\.?m\.?)?(?![\w.])', re.I)),
+)
+TIME_KEY = re.compile(r'(time|date|updated|generated|created|_at$|^dt$|timestamp)', re.I)
 NUMBER = re.compile(r'(?<![\w.])-?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?:[eE][+-]?\d+)?(?![\w.])')
 
 
@@ -97,7 +110,56 @@ def _numeric_tokens(value: str) -> list[tuple[float, int]]:
     return out
 
 
-def verify_ui_numbers(ui: dict, payload: Any, question: str = '') -> None:
+def _known_dates(value: Any, found: set[date], key: str = '', depth: int = 0) -> None:
+    """Dates the payload itself contains: ISO date strings and epoch timestamps under time-like keys."""
+    if depth > 12 or len(found) > 5000: return
+    if isinstance(value, dict):
+        for k, v in value.items(): _known_dates(v, found, str(k), depth + 1)
+    elif isinstance(value, list):
+        for v in value[:1000]: _known_dates(v, found, key, depth + 1)
+    elif isinstance(value, str):
+        m = re.match(r'\s*(\d{4})-(\d{2})-(\d{2})', value)
+        if m:
+            try: found.add(date(int(m[1]), int(m[2]), int(m[3])))
+            except ValueError: pass
+    elif isinstance(value, (int, float)) and not isinstance(value, bool) and TIME_KEY.search(key):
+        seconds = value / 1000 if 1e12 <= value < 1e13 else value if 1e9 <= value < 1e10 else None
+        if seconds is not None:
+            found.add(datetime.fromtimestamp(seconds, timezone.utc).date())
+
+
+def _month(name: str) -> int:
+    return MONTHS[name.lower()[:3]]
+
+
+def _dates_in(text: str) -> tuple[list[tuple[int | None, int | None, int | None]], str]:
+    """Find date and time expressions. Returns their (year, month, day) parts and the text with them blanked out."""
+    found: list[tuple[int | None, int | None, int | None]] = []
+    for kind, pattern in DATE_PATTERNS:
+        def blank(m: re.Match) -> str:
+            g = m.groups()
+            if kind == 'iso': found.append((int(g[0]), int(g[1]), int(g[2])))
+            elif kind == 'mdy':
+                year = int(g[3]) if g[3] else None
+                found.append((year, _month(g[0]), int(g[1])))
+                if g[2]: found.append((year, _month(g[0]), int(g[2])))
+            elif kind == 'dmy': found.append((int(g[2]) if g[2] else None, _month(g[1]), int(g[0])))
+            elif kind == 'my': found.append((int(g[1]), _month(g[0]), None))
+            elif kind == 'slash': found.append((int(g[2]), -int(g[0]), int(g[1])))  # Month/day order is ambiguous.
+            return ' ' * len(m.group(0))
+        text = pattern.sub(blank, text)
+    return found, text
+
+
+def _date_is_known(parts: tuple[int | None, int | None, int | None], known: set[date]) -> bool:
+    year, month, day = parts
+    if month is not None and month < 0:  # d/m/y or m/d/y: accept either reading.
+        a, b = -month, day
+        return any(d.year == year and {(d.month, d.day)} & {(a, b), (b, a)} for d in known)
+    return any((year is None or d.year == year) and d.month == month and (day is None or d.day == day) for d in known)
+
+
+def verify_ui_numbers(ui: dict, payload: Any, question: str = '', today: date | None = None) -> None:
     """Reject invented numbers; permit sourced numbers, rounding and returned-record counts.
 
     Does not independently prove nonnumeric claims. The answerability check in the agent
@@ -106,9 +168,20 @@ def verify_ui_numbers(ui: dict, payload: Any, question: str = '') -> None:
     observed: list[float] = []
     _source_numbers(payload, observed)
     observed.extend(n for n, _ in _numeric_tokens(question))
+    # Dates are labels, not measurements: a date is accepted if the payload contains it or it is
+    # recent enough to be the question's own period ("today", "yesterday", "past week").
+    today = today or datetime.now(timezone.utc).date()
+    known: set[date] = {today + timedelta(days=offset) for offset in range(-8, 2)}
+    _known_dates(payload, known)
+    years = {float(d.year) for d in known}
 
     def require(value: str) -> None:
+        dates, value = _dates_in(value)
+        for parts in dates:
+            if not _date_is_known(parts, known):
+                raise ValueError(f'Dashboard contains an unverified date ({"-".join(str(abs(p)) for p in parts if p is not None)})')
         for number, precision in _numeric_tokens(value):
+            if precision == 0 and number in years: continue
             if not any(round(source, precision) == round(number, precision)
                        for source in observed):
                 raise ValueError(f'Dashboard contains an unverified number ({number:g})')

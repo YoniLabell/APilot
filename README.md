@@ -65,6 +65,8 @@ APilot uses a **fail-closed** result pipeline: a JSON response alone does not pr
 1. Reject `success: false`, `status: error`, deprecation messages, non-JSON responses and empty result collections.
 2. Ask the analyst model whether the returned data actually covers the requested metric, geography and period. If not, try another API.
 3. Reject dashboard numbers that are absent from the returned JSON. Displayed rounding and exact record counts are allowed.
+   - Dates are checked as dates, not as measurements. A date passes if the JSON contains it (as a date string or an epoch timestamp), or if it falls between 8 days ago and tomorrow, which covers "today", "yesterday" and "past week" in any time zone. Any other date is rejected.
+   - Times of day such as `14:00` are treated as labels.
 4. Only then return `verified: true` to the UI. The frontend refuses to show older, unverified saved results as live dashboards.
 5. When every provider fails, show an error instead of an invented dashboard. Agent X-Ray includes the reason for each retry.
 
