@@ -15,6 +15,7 @@ APilot is an experimental **English-only** full-stack application powered by Ope
 - Separate **Generative UI** stage that returns JSON dashboard definitions — not executable AI-generated HTML or JavaScript.
 - Responsive React UI with cards, charts, sortable tables, a results popup, and **Agent X-Ray** streamed live while the agent works (with cancel).
 - Export dashboards as PNG or JSON; search, refresh and delete saved dashboards.
+- Light and dark themes: follows the system setting by default, with a Light / System / Dark toggle in the top bar.
 - API Roulette (random provider experiments) and browser-local saved dashboards.
 - Optional site access passphrase to reduce misuse of your OpenAI API credits.
 - Dockerfile and Render blueprint, plus GitHub Actions checks.
