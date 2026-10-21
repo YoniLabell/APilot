@@ -331,7 +331,9 @@ def audit_dashboard(ui: dict, payload: Any, question: str = '') -> list[str]:
         return bool(re.search(r'earthquakes?|quakes?|events?|number of|total|count', text, re.I))
 
     def correct_scope_count(value: str, label: str) -> str:
-        if scope is None or not count_label(label):
+        if scope is None or not (count_label(label) or count_label(value)):
+            return value
+        if re.search(r'all magnitudes|unfiltered|regardless of magnitude', label + ' ' + value, re.I):
             return value
         # Statistics and table cells with a count label identify their metric
         # directly, rather than relying on a surrounding paragraph.
