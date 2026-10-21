@@ -1,6 +1,6 @@
 import {useRef, useState} from 'react'
 import {BarChart3, CheckCircle2, Copy, Database, ExternalLink, FileDown, FileJson, ImageDown, Layers3,
-  LoaderCircle, RefreshCw, ShieldCheck, Sparkles, Terminal, X} from 'lucide-react'
+  LoaderCircle, RefreshCw, ShieldCheck, Sparkles, Terminal, TriangleAlert, X} from 'lucide-react'
 import type {Answer} from '../types'
 import {download, formatDateTime, slugify} from '../lib/format'
 import {STAGE_TONE} from '../lib/stages'
@@ -103,13 +103,19 @@ export function ResultModal({answer, question, saved, onClose, onSave, onRefresh
       <div className="popup-body" role="tabpanel">
         {tab === 'dashboard' && <div className="dashboard" ref={capture}>
           <div className="result-meta">
-            <span className="source-badge"><CheckCircle2 size={14}/> Validated API response</span>
+            <span className="source-badge"><CheckCircle2 size={14}/> API response received</span>
             <span className="meta-chip"><Database size={13}/> {answer.provider.name}</span>
             {answer.provider.category && <span className="meta-chip">{answer.provider.category}</span>}
           </div>
           <p className="question-label">“{question}”</p>
           {ui.summary && <p className="result-summary">{ui.summary}</p>}
           {ui.blocks.map((block, i) => <RenderBlock block={block} key={i}/>)}
+          {!!answer.validation_warnings?.length && <div className="warning" role="alert">
+            <TriangleAlert size={18}/>
+            <div><strong>Data quality notice · {answer.validation_warnings.length} flagged issue(s)</strong>
+              <ul>{answer.validation_warnings.map((message, index) => <li key={index}>{message}</li>)}</ul>
+            </div>
+          </div>}
           {ui.caveat && <div className="warning"><ShieldCheck size={18}/><span>{ui.caveat}</span></div>}
           <div className="source-link">
             <span>Source: <b>{answer.provider.name}</b></span>
