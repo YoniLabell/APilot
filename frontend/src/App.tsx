@@ -143,7 +143,7 @@ export default function App() {
       {panel === 'explore'
         ? <ExplorePanel question={question} setQuestion={setQuestion} accessKey={accessKey} setAccessKey={setAccessKey}
             protectedApi={protectedApi} loading={loading} progress={progress} error={error} onDismissError={() => setError('')}
-            onAsk={text => void ask(text)} onCancel={() => controller.current?.abort()} onRoulette={() => void roulette()}/>
+            onAsk={(text, api) => void ask(text, api)} onCancel={() => controller.current?.abort()} onRoulette={() => void roulette()}/>
         : <SavedPanel saved={saved} loading={loading} onOpen={item => { setResult(item.result); setAnswered(item.question) }}
             onRefresh={item => refresh(item.question)} onDelete={deleteSaved} onExplore={() => setPanel('explore')}/>}
     </main>

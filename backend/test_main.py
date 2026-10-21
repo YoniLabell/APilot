@@ -59,3 +59,40 @@ def test_stream_reports_errors(monkeypatch):
     with TestClient(app).stream('POST','/api/ask/stream',json={'question':'Rainfall yesterday'}) as resp:
         body=resp.read().decode()
     assert 'event: error' in body and 'No matching API' in body
+
+@pytest.fixture
+def fake_web(monkeypatch):
+    """Serve canned responses through public_get with every host resolving to a public IP."""
+    import asyncio, httpx, main
+    routes={}
+    monkeypatch.setattr(main,'_transport',httpx.MockTransport(lambda request: routes[str(request.url)]()))
+    monkeypatch.setattr(main.socket,'getaddrinfo',lambda *a,**k:[(None,None,None,None,('93.184.216.34',443))])
+    return routes, lambda *args: asyncio.run(main.public_get(*args))
+
+def redirect(to):
+    import httpx
+    return lambda: httpx.Response(301,headers={'location':to})
+
+def test_follows_redirects(fake_web):
+    import httpx
+    routes,get=fake_web
+    routes['https://example.com/docs']=redirect('/en/docs')
+    routes['https://example.com/en/docs']=redirect('https://www.example.com/en/docs')
+    routes['https://www.example.com/en/docs']=lambda: httpx.Response(200,text='Rain API docs',headers={'content-type':'text/html'})
+    assert get('https://example.com/docs')==('Rain API docs','text/html','https://www.example.com/en/docs')
+
+def test_redirect_to_private_host_blocked(fake_web):
+    routes,get=fake_web
+    routes['https://example.com/docs']=redirect('https://localhost/admin')
+    with pytest.raises(ValueError): get('https://example.com/docs')
+
+def test_redirect_cannot_leave_provider(fake_web):
+    routes,get=fake_web
+    routes['https://api.example.com/rain']=redirect('https://evil.com/rain')
+    with pytest.raises(ValueError,match='outside the selected API provider'): get('https://api.example.com/rain',('https://example.com',))
+
+def test_redirect_loop_stops(fake_web):
+    routes,get=fake_web
+    routes['https://example.com/a']=redirect('/b')
+    routes['https://example.com/b']=redirect('/a')
+    with pytest.raises(ValueError,match='Too many redirects'): get('https://example.com/a')

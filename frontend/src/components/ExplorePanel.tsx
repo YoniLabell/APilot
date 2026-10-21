@@ -4,11 +4,13 @@ import {Activity, ArrowRight, BookOpen, ChevronRight, CloudRain, Eye, EyeOff, Fi
 import type {Progress} from '../types'
 import {ProgressPanel} from './ProgressPanel'
 
+// Each example is pinned to a stable no-auth API (an exact catalog name) so it skips the
+// keyword-ranking step, where the right provider can lose a tie to dozens of similar ones.
 const EXAMPLES = [
-  {icon: CloudRain, label: 'Weather', q: 'How much rain fell in Mexico City yesterday?'},
-  {icon: Activity, label: 'Science', q: 'What were the strongest earthquakes worldwide last week?'},
-  {icon: Globe2, label: 'World Data', q: 'Compare the populations of Japan, India and Brazil'},
-  {icon: BookOpen, label: 'Books', q: 'Find Isaac Asimov books and show their publication years'},
+  {icon: CloudRain, label: 'Weather', api: 'Open-Meteo', q: 'How much rain fell in Mexico City yesterday?'},
+  {icon: Activity, label: 'Science', api: 'USGS Earthquake Hazards Program', q: 'Which earthquakes of magnitude 5 or more happened worldwide in the past week?'},
+  {icon: Globe2, label: 'World Data', api: 'REST Countries', q: 'Compare the populations of Japan, India and Brazil'},
+  {icon: BookOpen, label: 'Books', api: 'Open Library', q: 'List 10 Isaac Asimov books with their first publication years'},
 ]
 
 type Props = {
@@ -21,7 +23,7 @@ type Props = {
   progress: Progress | null
   error: string
   onDismissError: () => void
-  onAsk: (text?: string) => void
+  onAsk: (text?: string, api?: string) => void
   onCancel: () => void
   onRoulette: () => void
 }
@@ -76,10 +78,10 @@ export function ExplorePanel(props: Props) {
     </div>
     <div className="suggestions">
       {EXAMPLES.map(item => <button key={item.label} className="suggestion" disabled={loading}
-        onClick={() => { setQuestion(item.q); onAsk(item.q) }}>
+        onClick={() => { setQuestion(item.q); onAsk(item.q, item.api) }}>
         <span className="suggestion-icon"><item.icon size={20}/></span>
         <h3>{item.q}</h3>
-        <small>{item.label} <ArrowRight size={14}/></small>
+        <small><span>{item.label} · {item.api.replace(' Earthquake Hazards Program', '')}</span> <ArrowRight size={14}/></small>
       </button>)}
     </div>
 
