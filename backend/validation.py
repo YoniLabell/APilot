@@ -85,6 +85,44 @@ def validate_api_payload(body: str) -> Any:
     return payload
 
 
+def earthquake_scope_count(payload: Any, question: str) -> dict[str, float | int] | None:
+    """Count qualifying USGS GeoJSON features rather than trusting feed metadata.count.
+
+    Provider metadata often counts all returned events. If the question requests
+    M5+, counting only properties.mag >= 5 is the defensible scoped answer.
+    """
+    if not isinstance(payload, dict) or not isinstance(payload.get('features'), list):
+        return None
+    if not re.search(r'earthquakes?|quakes?|seismic', question, re.I):
+        return None
+    match = re.search(
+        r'\\bmagnitude\\s*(?:of\\s*)?(\\d+(?:\\.\\d+)?)\\s*(?:or\\s+(?:more|higher|greater)|and\\s+above|\\+)|'
+        r'\\b(?:at\\s+least|above)\\s+magnitude\\s*(\\d+(?:\\.\\d+)?)|'
+        r'\\bM\\s*(\\d+(?:\\.\\d+)?)\\s*\\+',
+        question, re.I)
+    if not match:
+        return None
+    minimum = float(next(value for value in match.groups() if value is not None))
+    features = payload['features']
+    total = sum(
+        1 for feature in features if isinstance(feature, dict)
+        and isinstance(feature.get('properties'), dict)
+        and _is_number(feature['properties'].get('mag'))
+        and float(feature['properties']['mag']) >= minimum
+    )
+    return {'minimum_magnitude': minimum, 'matched_count': total,
+            'returned_features': len(features)}
+
+
+def scoped_facts_text(payload: Any, question: str) -> str:
+    scope = earthquake_scope_count(payload, question)
+    if scope is None:
+        return ''
+    return (f"EARTHQUAKE SCOPE (computed from ALL features): magnitude >= {scope['minimum_magnitude']:g}: "
+            f"{scope['matched_count']} matching events from {scope['returned_features']} returned features. "
+            "Never use metadata.count as the magnitude-filtered event count unless it agrees with this calculation.")
+
+
 def _source_numbers(value: Any, bag: list[float], depth: int = 0) -> None:
     if depth > 12 or len(bag) > 15000: return
     if isinstance(value, dict):
@@ -275,3 +313,95 @@ def verify_ui_numbers(ui: dict, payload: Any, question: str = '', today: date | 
                 for cell in row: require(str(cell))
         elif kind == 'text':
             require(str(block.get('content') or ''))
+
+def audit_dashboard(ui: dict, payload: Any, question: str = '') -> list[str]:
+    """Validate each rendered figure independently, returning user-visible warnings.
+
+    Unsupported figures are hidden, not represented as sourced data. Unlike
+    verify_ui_numbers(), a single unsupported claim cannot lose the entire run.
+    """
+    warnings: list[str] = []
+    scope = earthquake_scope_count(payload, question)
+
+    def warning(message: str) -> None:
+        if message not in warnings and len(warnings) < 15:
+            warnings.append(message[:240])
+
+    def count_label(text: str) -> bool:
+        return bool(re.search(r'earthquakes?|quakes?|events?|number of|total|count', text, re.I))
+
+    def correct_scope_count(value: str, label: str) -> str:
+        if scope is None or not count_label(label):
+            return value
+        # Statistics and table cells with a count label identify their metric
+        # directly, rather than relying on a surrounding paragraph.
+        matched = re.fullmatch(r'\\s*(\\d[\\d,]*)\\s*(?:events?|earthquakes?|quakes?)?\\s*', value, re.I)
+        if matched:
+            number = int(matched[1].replace(',', ''))
+            actual = int(scope['matched_count'])
+            if number != actual:
+                warning(f"Corrected a magnitude >= {scope['minimum_magnitude']:g} earthquake count "
+                        f"from {number} to {actual} using the returned feature records.")
+                return value.replace(matched[1], str(actual), 1)
+        # For narrative sentences, only numbers directly preceding a count noun
+        # are considered totals; magnitude, date and depth figures remain intact.
+        def replace(m: re.Match) -> str:
+            stated = int(m[1].replace(',', ''))
+            actual = int(scope['matched_count'])
+            if stated != actual:
+                warning(f"Corrected a magnitude >= {scope['minimum_magnitude']:g} earthquake count "
+                        f"from {stated} to {actual} using the returned feature records.")
+            return str(actual) + m[2]
+        return re.sub(r'\\b(\\d[\\d,]*)((?:\\s+|\\s+M\\d+(?:\\.\\d+)?\\+\\s+)(?:earthquakes?|quakes?|events?))\\b',
+                      replace, value, flags=re.I)
+
+    def checked(value: str, label: str, fallback: str = 'Unverified') -> str:
+        value = correct_scope_count(str(value), label)
+        try:
+            verify_ui_numbers({'summary': value, 'blocks': []}, payload, question)
+        except ValueError as exc:
+            warning(f"{label}: {str(exc)[:140]}; the figure was hidden.")
+            return fallback
+        return value
+
+    ui['title'] = checked(str(ui.get('title') or ''), 'Title', 'Data Explorer')
+    for field in ('subtitle', 'summary', 'caveat'):
+        value = str(ui.get(field) or '')
+        if value:
+            ui[field] = checked(value, field.title(),
+                                'Some generated figures could not be verified against the API response.' if field == 'summary' else '')
+    original = ui.get('blocks', [])
+    cleaned = []
+    for block in original:
+        kind = block.get('type')
+        if kind == 'stats':
+            for item in block.get('items', []):
+                item['value'] = checked(str(item.get('value') or ''), str(item.get('label') or 'Statistic'))
+            cleaned.append(block)
+        elif kind == 'table':
+            columns = block.get('columns', [])
+            for row in block.get('rows', []):
+                for index, cell in enumerate(row):
+                    label = columns[index] if index < len(columns) else 'Table value'
+                    row[index] = checked(str(cell), str(label))
+            cleaned.append(block)
+        elif kind == 'chart':
+            # Arbitrary chart aggregates are not blindly approved. Remove a chart
+            # if even one plotted measurement cannot be tied to source data.
+            valid = True
+            for row in block.get('data', []):
+                for series in block.get('series', []):
+                    key = series.get('key')
+                    if key in row and checked(str(row[key]), str(series.get('label') or 'Chart measurement')) == 'Unverified':
+                        valid = False
+            if valid:
+                cleaned.append(block)
+            else:
+                warning(f"Chart '{block.get('title') or 'Untitled'}' was hidden because its values could not be verified.")
+        elif kind == 'text':
+            block['content'] = checked(str(block.get('content') or ''), str(block.get('title') or 'Text'))
+            cleaned.append(block)
+    ui['blocks'] = cleaned or [{'type': 'text', 'title': 'Source data retrieved',
+                                 'content': 'The source returned data, but no generated figures passed automated checks. '
+                                            'Open Raw JSON or the source URL to inspect the response.'}]
+    return warnings
