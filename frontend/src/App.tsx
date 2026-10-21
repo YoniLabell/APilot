@@ -8,6 +8,8 @@ import {ExplorePanel} from './components/ExplorePanel'
 import {SavedPanel} from './components/SavedPanel'
 import {ResultModal} from './components/ResultModal'
 import {Toast, type ToastState} from './components/Toast'
+import {ThemeToggle} from './components/ThemeToggle'
+import {useTheme} from './lib/theme'
 
 const SAVED_KEY = 'apilot-saved'
 const ACCESS_KEY = 'apilot-key'
@@ -31,6 +33,7 @@ export default function App() {
   const [menu, setMenu] = useState(false)
   const [saved, setSaved] = useState<Saved[]>(() => readJSON(local, SAVED_KEY, []))
   const [toast, setToast] = useState<ToastState | null>(null)
+  const [theme, setTheme] = useTheme()
   const controller = useRef<AbortController | null>(null)
   const loading = progress !== null
 
@@ -132,7 +135,10 @@ export default function App() {
       <header className="topbar">
         <button className="mobile-menu icon-btn" onClick={() => setMenu(!menu)} aria-label="Open navigation menu" aria-expanded={menu}><Menu size={20}/></button>
         <span className="breadcrumbs">Workspace / <b>{panel === 'explore' ? 'Explore' : 'Saved'}</b></span>
-        <div className={`status status-${health}`}><span className="online"/> {HEALTH_LABEL[health]}</div>
+        <div className="topbar-end">
+          <div className={`status status-${health}`} title={HEALTH_LABEL[health]}><span className="online"/> <span className="status-label">{HEALTH_LABEL[health]}</span></div>
+          <ThemeToggle value={theme} onChange={setTheme}/>
+        </div>
       </header>
       {panel === 'explore'
         ? <ExplorePanel question={question} setQuestion={setQuestion} accessKey={accessKey} setAccessKey={setAccessKey}

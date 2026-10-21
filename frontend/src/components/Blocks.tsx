@@ -4,7 +4,8 @@ import {Area, AreaChart, Bar, BarChart, CartesianGrid, Legend, ResponsiveContain
 import type {Block, Chart, Series, Stats, Table, TextBlock} from '../types'
 import {formatCompact, formatNumber, toNumber} from '../lib/format'
 
-export const CHART_COLORS = ['#a395ff', '#41d6c2', '#ff9fc8', '#ffc77b']
+// Theme-aware palette, defined as --c1..--c4 in styles.css.
+export const CHART_COLORS = ['var(--c1)', 'var(--c2)', 'var(--c3)', 'var(--c4)']
 
 function StatsBlock({block}: {block: Stats}) {
   return <section className="block">
