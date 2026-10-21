@@ -11,7 +11,7 @@ import socket
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 import httpx
 from bs4 import BeautifulSoup
@@ -91,26 +91,41 @@ def same_provider(host: str, docs_host: str) -> bool:
     return a[-2:]==b[-2:]
 
 
-async def public_get(url: str, provider: str = '') -> tuple[str,str]:
+MAX_REDIRECTS=4
+_transport: httpx.AsyncBaseTransport|None = None  # Tests swap in a mock transport.
+
+
+async def check_target(url: str, providers: tuple[str,...]) -> None:
     host=safe_host(url)
-    if provider and not same_provider(host,safe_host(provider)):
+    if providers and not any(same_provider(host,safe_host(p)) for p in providers):
         raise ValueError('Endpoint is outside the selected API provider')
     try:
         dns=await asyncio.wait_for(asyncio.to_thread(socket.getaddrinfo,host,443,type=socket.SOCK_STREAM),5)
     except (OSError,asyncio.TimeoutError) as exc: raise ValueError('DNS check failed') from exc
     if not dns or any(not ipaddress.ip_address(item[4][0]).is_global for item in dns):
         raise ValueError('Non-public target IP blocked')
-    async with httpx.AsyncClient(timeout=httpx.Timeout(15,connect=6),trust_env=False,follow_redirects=False) as client:
-        async with client.stream('GET',url,headers={'User-Agent':'APilot/0.1 data exploration','Accept':'application/json, text/html, text/plain'}) as response:
-            response.raise_for_status()
-            content_type=response.headers.get('content-type','').split(';')[0]
-            if content_type and not (content_type.startswith('text/') or 'json' in content_type or content_type in ('application/xml','application/yaml')):
-                raise ValueError('Unsupported content type')
-            body=bytearray()
-            async for chunk in response.aiter_bytes():
-                body.extend(chunk)
-                if len(body)>750000: raise ValueError('API response exceeds size limit')
-            return body.decode('utf-8','replace'),content_type
+
+
+async def public_get(url: str, providers: tuple[str,...] = ()) -> tuple[str,str,str]:
+    """GET a public HTTPS URL. Redirects are followed by hand so every hop passes the same checks.
+    Returns (body, content type, final URL)."""
+    async with httpx.AsyncClient(timeout=httpx.Timeout(15,connect=6),trust_env=False,follow_redirects=False,transport=_transport) as client:
+        for _ in range(MAX_REDIRECTS+1):
+            await check_target(url,providers)
+            async with client.stream('GET',url,headers={'User-Agent':'APilot/0.1 data exploration','Accept':'application/json, text/html, text/plain'}) as response:
+                if response.is_redirect:
+                    url=urljoin(url,response.headers['location'])
+                    continue
+                response.raise_for_status()
+                content_type=response.headers.get('content-type','').split(';')[0]
+                if content_type and not (content_type.startswith('text/') or 'json' in content_type or content_type in ('application/xml','application/yaml')):
+                    raise ValueError('Unsupported content type')
+                body=bytearray()
+                async for chunk in response.aiter_bytes():
+                    body.extend(chunk)
+                    if len(body)>750000: raise ValueError('API response exceeds size limit')
+                return body.decode('utf-8','replace'),content_type,url
+    raise ValueError('Too many redirects')
 
 
 def readable(body: str, content_type: str, limit: int = 16000) -> str:
@@ -164,7 +179,7 @@ def log(trace: list,stage: str,message: str,detail: str = ''):
     trace.append({'stage':stage,'message':message[:180],'detail':detail[:900],'elapsed':elapsed})
 
 
-async def get_api_data(ai, entry: dict, docs: str, question: str, trace: list) -> tuple[str,str]:
+async def get_api_data(ai, entry: dict, docs: str, question: str, trace: list, providers: tuple[str,...]) -> tuple[str,str]:
     tool=[{'type':'function','function':{'name':'http_get','description':'GET JSON data from selected public API. No authentication or modifications.',
       'parameters':{'type':'object','properties':{'url':{'type':'string'}},'required':['url'],'additionalProperties':False}}}]
     now=datetime.now(timezone.utc).isoformat()
@@ -190,7 +205,7 @@ async def get_api_data(ai, entry: dict, docs: str, question: str, trace: list) -
                 if url in tried: raise ValueError('Duplicate request')
                 tried.add(url)
                 log(trace,'HTTP GET','LLM requested a public data endpoint',url)
-                raw,typ=await public_get(url,entry['url'])
+                raw,typ,url=await public_get(url,providers)
                 if 'json' not in typ and not raw.lstrip().startswith(('{','[')):
                     raise ValueError('No JSON was returned')
                 json.loads(raw)
@@ -275,10 +290,12 @@ async def explore(question: str, preferred: str='', listener=None) -> dict:
     for entry in candidates[:3]:
         try:
             log(trace,'DOCUMENTATION',f'Reading documentation for {entry["name"]}',entry['url'])
-            text,typ=await public_get(entry['url'])
+            text,typ,docs_url=await public_get(entry['url'])
+            if docs_url!=entry['url']: log(trace,'DOCUMENTATION','Documentation redirected',docs_url)
             docs=readable(text,typ,14000)
             if len(docs)<45: raise ValueError('Documentation missing or unreadable')
-            url,data=await get_api_data(ai,entry,docs,question,trace)
+            # Docs that moved to a new domain bring their API with them, so allow both.
+            url,data=await get_api_data(ai,entry,docs,question,trace,(entry['url'],docs_url))
             log(trace,'ANALYSIS','LLM analyzes actual response and provenance')
             facts=await json_model(ai,AGENT_MODEL,
                 'Strict analyst: Answer in ENGLISH ONLY. Use only supplied JSON; never fabricate numbers. Distinguish forecasts and observations. '
