@@ -140,3 +140,54 @@ def test_numbers_inside_payload_text_and_coordinate_facts_pass(text):
 def test_rejection_names_where_the_number_appeared():
     with pytest.raises(ValueError, match=r'unverified number \(140\) in "A quake 140 km from Tonga'):
         verify_ui_numbers({'summary': 'A quake 140 km from Tonga reached M 7.2.', 'blocks': []}, QUAKE_TEXT, today=TODAY)
+
+
+ARCHIVE = 'https://archive-api.open-meteo.com/v1/archive?latitude=31.77&longitude=35.21&start_date=2026-10-15&end_date=2026-10-21&daily=temperature_2m_max'
+
+
+@pytest.mark.parametrize('question,url,problem', [
+    # QA P0-1: a forecast question was answered from the archive for the PAST week.
+    ('What is the weather forecast for Jerusalem this week?', ARCHIVE, 'archive endpoint'),
+    ('What is the weather forecast for Jerusalem this week?', ARCHIVE.replace('archive-api', 'api').replace('/archive', '/forecast'), 'in the past'),
+    ('מה התחזית לירושלים מחר?', ARCHIVE, 'archive endpoint'),
+    ('How much rain fell in Mexico City yesterday?', 'https://api.open-meteo.com/v1/forecast?start_date=2026-10-25&end_date=2026-10-26', 'future dates'),
+])
+def test_request_period_must_match_the_question(question, url, problem):
+    from validation import period_problem
+    assert problem in (period_problem(question, url, TODAY) or '')
+
+
+@pytest.mark.parametrize('question,url', [
+    ('What is the weather forecast for Jerusalem this week?', 'https://api.open-meteo.com/v1/forecast?latitude=31.77&longitude=35.21&daily=temperature_2m_max&timezone=auto'),
+    ('How much rain fell in Mexico City yesterday?', 'https://api.open-meteo.com/v1/forecast?latitude=19.43&longitude=-99.13&daily=precipitation_sum&past_days=1&timezone=auto'),
+    ('Which earthquakes of magnitude 5 or more happened worldwide in the past week?', 'https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&starttime=2026-10-14&minmagnitude=5'),
+    ('What is the weather in Berlin?', ARCHIVE),  # No clear period: nothing to enforce.
+])
+def test_matching_periods_pass(question, url):
+    from validation import period_problem
+    assert period_problem(question, url, TODAY) is None
+
+
+WORLD_BANK = [{'page': 1, 'pages': 1, 'total': 2},
+              [{'date': '2023', 'value': 136410000000.0, 'country': {'value': 'Israel'}},
+               {'date': '2004', 'value': 0.0523, 'country': {'value': 'Israel'}}]]
+
+
+@pytest.mark.parametrize('text', [
+    "Israel's GDP was $136.4B in 2023.",  # QA P0-2: rejected as "unverified number (136.4)".
+    'GDP: 136 billion dollars.',
+    'Unit glued to the number: 136.4B, rate 5.23%.',
+    'Growth was 5.2% in 2004.',
+    'GDP over the last 20 years.',  # 20 comes from the request URL below.
+])
+def test_scaled_values_and_request_parameters_pass(text):
+    verify_ui_numbers({'summary': text, 'blocks': []}, WORLD_BANK,
+                      'GDP of Israel https://api.worldbank.org/v2/country/ISR/indicator/NY.GDP.MKTP.CD?format=json&date=2004:2023&per_page=20', today=TODAY)
+
+
+@pytest.mark.parametrize('text', [
+    'GDP was $150.2B in 2023.',  # The B suffix used to hide the number from the check entirely.
+    'Growth was 7.1% in 2004.', 'A depth of 12km.'])
+def test_scaled_values_that_do_not_match_are_rejected(text):
+    with pytest.raises(ValueError, match='unverified number'):
+        verify_ui_numbers({'summary': text, 'blocks': []}, WORLD_BANK, 'GDP of Israel', today=TODAY)

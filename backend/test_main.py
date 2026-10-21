@@ -180,3 +180,16 @@ def test_dashboard_still_failing_after_redesign_is_rejected(monkeypatch):
     invented = {'title': 'Quakes', 'summary': '192 earthquakes this week.', 'blocks': [{'type': 'text', 'content': 'x'}]}
     with pytest.raises(ValueError, match='unverified number'):
         _explore_with(monkeypatch, [dict(invented), dict(invented)])
+
+def test_agent_is_told_to_use_a_forecast_for_a_forecast_question(fake_web):
+    """QA P0-1: the agent must not answer a forecast question from the archive."""
+    import asyncio, httpx, main
+    routes,_=fake_web
+    archive='https://archive-api.open-meteo.com/v1/archive?latitude=31.77&longitude=35.21&start_date=2020-10-15&end_date=2020-10-21&daily=temperature_2m_max&timezone=auto'
+    forecast='https://api.open-meteo.com/v1/forecast?latitude=31.77&longitude=35.21&daily=temperature_2m_max&timezone=auto'
+    routes[forecast]=lambda: httpx.Response(200,json={'daily':{'time':['2099-01-01'],'temperature_2m_max':[24.1]}})
+    agent=FakeAgent([archive,forecast])
+    url,data,payload=asyncio.run(main.get_api_data(agent,{'name':'Open-Meteo','url':'https://open-meteo.com/'},'docs',
+        'What is the weather forecast for Jerusalem this week?',main.Trace(),('https://open-meteo.com/',)))
+    assert url==forecast
+    assert 'archive endpoint' in agent.seen[1][0]['content']  # the archive request was never sent

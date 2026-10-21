@@ -6,6 +6,7 @@ import math
 import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import unquote, urlsplit
 
 DATA_KEYS = frozenset({'data', 'results', 'result', 'records', 'items', 'features', 'observations', 'entries'})
 META_KEYS = frozenset({'success', 'ok', 'status', 'message', 'error', 'errors', 'code', 'detail', 'pagination', 'links', 'meta', 'metadata', 'timestamp', 'api_version', 'version'})
@@ -22,10 +23,17 @@ DATE_PATTERNS = (  # Each yields (kind, regex); groups are read by _dates_in.
     ('slash', re.compile(r'(?<![\w.])(\d{1,2})[/.](\d{1,2})[/.](\d{4})(?!\w|\.\d)')),
     ('time', re.compile(r'(?<![\w.])\d{1,2}:\d{2}(?::\d{2})?(?:\s?[ap]\.?m\.?)?(?!\w|\.\d)', re.I)),
 )
+# Question intent, used to check that a request's dates match the period asked about.
+FUTURE = re.compile(r'\b(forecasts?|tomorrow|upcoming|next (?:week|weekend|month|\d+ days|few days)|coming (?:days|week)|will (?:it|there))\b'
+                    r'|\u05ea\u05d7\u05d6\u05d9\u05ea|\u05de\u05d7\u05e8|\u05d1\u05e9\u05d1\u05d5\u05e2 \u05d4\u05d1\u05d0|\u05d1\u05d9\u05de\u05d9\u05dd \u05d4\u05e7\u05e8\u05d5\u05d1\u05d9\u05dd', re.I)
+PAST = re.compile(r'\b(yesterday|ago|historical|history|(?:last|past|previous) (?:week|weekend|month|year|decade|\d+ (?:days|weeks|months|years)))\b'
+                  r'|\u05d0\u05ea\u05de\u05d5\u05dc|\u05d1\u05e9\u05d1\u05d5\u05e2 \u05e9\u05e2\u05d1\u05e8', re.I)
+ISO_DATE = re.compile(r'(?<!\d)(\d{4})-(\d{2})-(\d{2})(?!\d)')
 TIME_KEY = re.compile(r'(time|date|updated|generated|created|_at$|^dt$|timestamp)', re.I)
 # Patterns end with (?!\w|\.\d): a decimal point stops a match, but a sentence-ending period
-# does not, so "Total: 99." is still checked.
-NUMBER = re.compile(r'(?<![\w.])-?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?:[eE][+-]?\d+)?(?!\w|\.\d)')
+# does not, so "Total: 99." is still checked. NUMBER also allows a unit suffix ("150.2B", "5km")
+# but not an ordinal ("3rd").
+NUMBER = re.compile(r'(?<![\w.])-?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?:[eE][+-]?\d+)?(?![\d_]|\.\d|(?:st|nd|rd|th)\b)')
 
 
 def _empty(value: Any) -> bool:
@@ -97,6 +105,34 @@ def _source_numbers(value: Any, bag: list[float], depth: int = 0) -> None:
     elif isinstance(value, str):
         # Numbers inside text are sourced too, e.g. "place": "81 km SW of Port-Vila".
         bag.extend(n for n, _ in _numeric_tokens(value[:500]))
+
+
+def _iso_dates(text: str) -> list[date]:
+    found = []
+    for m in ISO_DATE.finditer(text):
+        try: found.append(date(int(m[1]), int(m[2]), int(m[3])))
+        except ValueError: pass
+    return found
+
+
+def period_problem(question: str, url: str, today: date | None = None) -> str | None:
+    """Explain why a request cannot answer the question's period, e.g. a forecast question sent to an archive."""
+    future, past = bool(FUTURE.search(question)), bool(PAST.search(question))
+    if future == past: return None  # No clear period, or both: nothing to enforce.
+    today = today or datetime.now(timezone.utc).date()
+    parts = urlsplit(url)
+    dates = _iso_dates(unquote(parts.query))
+    if future:
+        if 'archive' in f'{parts.hostname} {parts.path}'.lower():
+            return 'The question asks about the future, but this is a historical archive endpoint. Use the provider\'s forecast endpoint instead.'
+        # A forecast needs dates after today; a range ending today only counts if "today" is asked for.
+        asks_today = bool(re.search(r'\btoday\b|\u05d4\u05d9\u05d5\u05dd', question, re.I))
+        if dates and (max(dates) < today or (max(dates) == today and not asks_today)):
+            return (f'The question asks about the future, but this request only covers {min(dates)} to {max(dates)}, which is in the past. '
+                    f'Request dates from {today} onward, or use a forecast endpoint without past dates.')
+    if past and dates and min(dates) > today:
+        return f'The question asks about the past, but this request only covers future dates from {min(dates)}. Request past dates instead.'
+    return None
 
 
 def _flatten(record: dict, prefix: str = '', depth: int = 0) -> dict[str, Any]:
@@ -241,11 +277,17 @@ def verify_ui_numbers(ui: dict, payload: Any, question: str = '', today: date | 
     observed.extend(n for n, _ in _numeric_tokens(question))
     for fact in payload_facts(payload):
         observed.extend(float(fact[k]) for k in ('records', 'min', 'max', 'mean', 'sum') if k in fact)
+    # Values are often shown scaled: 136410000000 as "$136.4B", 0.0523 as "5.2%". Matching still
+    # uses the precision the dashboard displays, so this is no looser than showing the raw value.
+    scaled = [s / k for s in observed for k in (1e3, 1e6, 1e9, 1e12) if abs(s) >= k]
+    scaled += [s * 100 for s in observed if 0 < abs(s) <= 1]
+    candidates = observed + scaled
     # Dates are labels, not measurements: a date is accepted if the payload contains it or it is
     # recent enough to be the question's own period ("today", "yesterday", "past week").
     today = today or datetime.now(timezone.utc).date()
     known: set[date] = {today + timedelta(days=offset) for offset in range(-8, 2)}
     _known_dates(payload, known)
+    known.update(_iso_dates(question))  # The question text may include the request URL and its dates.
     years = {float(d.year) for d in known}
 
     def require(value: str) -> None:
@@ -256,7 +298,7 @@ def verify_ui_numbers(ui: dict, payload: Any, question: str = '', today: date | 
         for number, precision in _numeric_tokens(value):
             if precision == 0 and number in years: continue
             if not any(round(source, precision) == round(number, precision)
-                       for source in observed):
+                       for source in candidates):
                 raise ValueError(f'Dashboard contains an unverified number ({number:g}) in "{_around(value, number)}"')
 
     for field in ('summary', 'subtitle'):
