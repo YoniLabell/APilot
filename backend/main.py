@@ -16,7 +16,7 @@ from urllib.parse import urlsplit
 import httpx
 from bs4 import BeautifulSoup
 from fastapi import Depends, FastAPI, Header, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -149,8 +149,19 @@ async def json_model(ai, model: str, system: str, prompt: str, budget: int = 140
     return value
 
 
+class Trace(list):
+    """Agent trace that also notifies an optional listener (used for live streaming)."""
+    def __init__(self, listener=None):
+        super().__init__(); self.listener=listener; self.started=time.monotonic()
+
+    def append(self, event: dict):
+        super().append(event)
+        if self.listener: self.listener(event)
+
+
 def log(trace: list,stage: str,message: str,detail: str = ''):
-    trace.append({'stage':stage,'message':message[:180],'detail':detail[:900]})
+    elapsed=round(time.monotonic()-getattr(trace,'started',time.monotonic()),1)
+    trace.append({'stage':stage,'message':message[:180],'detail':detail[:900],'elapsed':elapsed})
 
 
 async def get_api_data(ai, entry: dict, docs: str, question: str, trace: list) -> tuple[str,str]:
@@ -193,6 +204,17 @@ async def get_api_data(ai, entry: dict, docs: str, question: str, trace: list) -
     raise ValueError('Provider returned no valid JSON after constrained attempts')
 
 
+def numeric(value):
+    """Chart values: turn numeric strings such as '1,234.5' into numbers so charts can plot them."""
+    if isinstance(value,bool) or value is None: return None
+    if isinstance(value,(int,float)): return value
+    text=str(value).strip().replace(',','')
+    if re.fullmatch(r'-?\d+(\.\d+)?([eE][+-]?\d+)?',text):
+        number=float(text)
+        return int(number) if number.is_integer() and 'e' not in text.lower() and '.' not in text else number
+    return None
+
+
 def clean_ui(raw: dict) -> dict:
     ui={'title':str(raw.get('title') or 'Data Explorer')[:100],
         'subtitle':str(raw.get('subtitle') or '')[:180],
@@ -212,22 +234,26 @@ def clean_ui(raw: dict) -> dict:
                 'columns':[str(x)[:80] for x in b['columns'][:8]],
                 'rows':[[str(v)[:140] for v in row[:8]] for row in b['rows'][:25] if isinstance(row,list)]})
         elif typ=='chart' and isinstance(b.get('series'),list) and isinstance(b.get('data'),list):
+            x_key=str(b.get('xKey') or 'name')[:60]
+            series=[{'key':str(x.get('key',''))[:60],'label':str(x.get('label',''))[:55],'unit':str(x.get('unit') or '')[:16]}
+                for x in b['series'][:4] if isinstance(x,dict)]
+            keys={s['key'] for s in series}
+            data=[{str(k)[:70]:numeric(v) if str(k) in keys else (v if isinstance(v,(str,int,float)) else str(v)[:75])
+                for k,v in list(row.items())[:8]} for row in b['data'][:35] if isinstance(row,dict)]
+            series=[s for s in series if any(isinstance(row.get(s['key']),(int,float)) for row in data)]
+            if not series: continue
             ui['blocks'].append({'type':'chart','title':title,
                 'chartType':b.get('chartType') if b.get('chartType') in ('line','bar') else 'bar',
-                'xKey':str(b.get('xKey') or 'name')[:60],
-                'series':[{'key':str(x.get('key',''))[:60],'label':str(x.get('label',''))[:55]}
-                    for x in b['series'][:4] if isinstance(x,dict)],
-                'data':[{str(k)[:70]:v if isinstance(v,(str,int,float)) else str(v)[:75]
-                    for k,v in list(row.items())[:8]} for row in b['data'][:35] if isinstance(row,dict)]})
+                'xKey':x_key,'series':series,'data':data})
         elif typ=='text': ui['blocks'].append({'type':'text','title':title,'content':str(b.get('content') or '')[:1700]})
     return ui
 
 
-async def explore(question: str, preferred: str='') -> dict:
+async def explore(question: str, preferred: str='', listener=None) -> dict:
     if not os.getenv('OPENAI_API_KEY'): raise ValueError('OPENAI_API_KEY missing from environment')
     from openai import AsyncOpenAI
     ai=AsyncOpenAI(api_key=os.environ['OPENAI_API_KEY'],timeout=40,max_retries=1)
-    trace=[]; entries=await catalog()
+    trace=Trace(listener); entries=await catalog()
     log(trace,'CATALOG',f'{len(entries)} no-auth HTTPS APIs indexed','Source: public-apis/public-apis')
     if preferred:
         entry=next((e for e in entries if e['name'].lower()==preferred.lower()),None)
@@ -262,7 +288,7 @@ async def explore(question: str, preferred: str='') -> dict:
             view=await json_model(ai,UI_MODEL,
                 'Create visually useful ENGLISH-ONLY dashboard schema, NOT HTML/JS. Only use numbers in supplied response and analyst facts. '
                 'Never invent a time series. JSON: title,subtitle,summary,caveat,blocks. '
-                'Blocks: stats {type,title,items:[{label,value}]}; chart {type,title,chartType:line|bar,xKey,series:[{key,label}],data:[{...}]}; '
+                'Blocks: stats {type,title,items:[{label,value}]}; chart {type,title,chartType:line|bar,xKey,series:[{key,label,unit}],data:[{...}]} with plain numbers in data; '
                 'table {type,title,columns:[string],rows:[[string]]}; text {type,title,content}. '
                 'Choose charts only if multiple actual numeric records exist; otherwise use stats,text,table.',
                 f'Question: {question}\nANALYSIS: {json.dumps(facts,ensure_ascii=False)[:5000]}\nACTUAL JSON: {data[:8000]}',2500)
@@ -313,6 +339,35 @@ async def ask(request:Question):
     try: return await explore(request.question,request.forced_api)
     except ValueError as e: raise HTTPException(status_code=422,detail=str(e)[:900]) from e
     except Exception as e: raise HTTPException(status_code=502,detail=f'Agent failed ({type(e).__name__}); inspect service logs') from e
+
+
+def sse(event: str, data) -> str:
+    return f'event: {event}\ndata: {json.dumps(data,ensure_ascii=False)}\n\n'
+
+
+@app.post('/api/ask/stream',dependencies=[Depends(authenticate)])
+async def ask_stream(request:Question):
+    """Same as /api/ask, but streams Agent X-Ray events as Server-Sent Events while the agent works."""
+    queue: asyncio.Queue = asyncio.Queue()
+
+    async def run():
+        try: await queue.put(('result',await explore(request.question,request.forced_api,lambda e:queue.put_nowait(('trace',e)))))
+        except ValueError as e: await queue.put(('error',{'detail':str(e)[:900]}))
+        except Exception as e: await queue.put(('error',{'detail':f'Agent failed ({type(e).__name__}); inspect service logs'}))
+        finally: await queue.put(None)
+
+    async def events():
+        task=asyncio.create_task(run())
+        try:
+            while True:
+                try: item=await asyncio.wait_for(queue.get(),15)
+                except asyncio.TimeoutError:
+                    yield ': keep-alive\n\n'; continue
+                if item is None: break
+                yield sse(*item)
+        finally: task.cancel()  # Client disconnected or cancelled: stop spending OpenAI calls.
+
+    return StreamingResponse(events(),media_type='text/event-stream',headers={'Cache-Control':'no-cache','X-Accel-Buffering':'no'})
 
 
 STATIC=Path(__file__).parent/'static'

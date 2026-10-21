@@ -28,3 +28,34 @@ def test_access_password(monkeypatch):
     client=TestClient(app)
     assert client.get('/api/health').status_code==200
     assert client.post('/api/ask',json={'question':'Rainfall yesterday'}).status_code==401
+
+def test_chart_numbers_coerced():
+    ui=clean_ui({'blocks':[{'type':'chart','xKey':'day','series':[{'key':'mm','label':'Rain','unit':'mm'},{'key':'missing'}],
+        'data':[{'day':'Mon','mm':'1,204.5'},{'day':'Tue','mm':3}]}]})
+    chart=ui['blocks'][0]
+    assert [s['key'] for s in chart['series']]==['mm']
+    assert [row['mm'] for row in chart['data']]==[1204.5,3]
+
+def test_chart_without_numbers_dropped():
+    assert clean_ui({'blocks':[{'type':'chart','series':[{'key':'v'}],'data':[{'v':'n/a'}]}]})['blocks']==[]
+
+def test_stream_emits_trace_then_result(monkeypatch):
+    import main
+    monkeypatch.delenv('APP_ACCESS_KEY',raising=False)
+    async def fake_explore(question,preferred='',listener=None):
+        main.log(main.Trace(listener),'CATALOG','indexed')
+        return {'ui':{'title':'ok'}}
+    monkeypatch.setattr(main,'explore',fake_explore)
+    with TestClient(app).stream('POST','/api/ask/stream',json={'question':'Rainfall yesterday'}) as resp:
+        assert resp.headers['content-type'].startswith('text/event-stream')
+        body=resp.read().decode()
+    assert body.index('event: trace')<body.index('event: result')
+
+def test_stream_reports_errors(monkeypatch):
+    import main
+    monkeypatch.delenv('APP_ACCESS_KEY',raising=False)
+    async def failing(question,preferred='',listener=None): raise ValueError('No matching API')
+    monkeypatch.setattr(main,'explore',failing)
+    with TestClient(app).stream('POST','/api/ask/stream',json={'question':'Rainfall yesterday'}) as resp:
+        body=resp.read().decode()
+    assert 'event: error' in body and 'No matching API' in body
