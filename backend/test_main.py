@@ -193,3 +193,80 @@ def test_agent_is_told_to_use_a_forecast_for_a_forecast_question(fake_web):
         'What is the weather forecast for Jerusalem this week?',main.Trace(),('https://open-meteo.com/',)))
     assert url==forecast
     assert 'archive endpoint' in agent.seen[1][0]['content']  # the archive request was never sent
+
+
+@pytest.mark.parametrize('question,expected', [
+    # QA P1-3: these picked irrelevant catalog providers by name.
+    ('What is the current Bitcoin price?', 'CoinGecko'),
+    ('Compare the populations of Japan, India and Brazil', 'REST Countries'),
+    ('What are the top stories on Hacker News right now?', 'Hacker News (Algolia)'),
+    ('Show me Pikachu stats', 'PokéAPI'),
+    ('What was the GDP of Israel over the last 20 years?', 'World Bank'),
+    ('When are the next SpaceX launches?', 'Launch Library 2'),
+    ('מה מזג האוויר בירושלים היום?', 'Open-Meteo'),
+    ('What is the weather forecast for Jerusalem this week?', 'Open-Meteo'),
+    ('Which earthquakes of magnitude 5 or more happened worldwide in the past week?', 'USGS Earthquake Hazards Program'),
+    ('What is the EUR/USD exchange rate over the last 30 days?', 'Frankfurter'),
+])
+def test_curated_provider_is_tried_first(question, expected):
+    from registry import golden_for
+    assert golden_for(question, [])[0]['name'] == expected
+
+def test_model_topic_selects_a_curated_provider_without_keywords():
+    from registry import golden_for
+    assert [g['name'] for g in golden_for('Wie ist das Wetter in Berlin?', [], 'weather')] == ['Open-Meteo']
+    assert golden_for('Random cat facts please', [], 'other') == []
+
+def test_semantic_rank_uses_descriptions_not_names():
+    import asyncio, main
+    from types import SimpleNamespace as NS
+    vocab = ['crypto', 'price', 'halving', 'countdown', 'holiday', 'weather']
+    def vec(text):
+        v = [float(w in text.lower()) for w in vocab]; n = sum(x*x for x in v) ** .5 or 1
+        return [x/n for x in v]
+    class Embeddings:
+        async def create(self, model, input, dimensions): return NS(data=[NS(embedding=vec(t)) for t in input])
+    entries = [{'name': 'Bitcoin Halving', 'url': 'https://a', 'description': 'Countdown to the next halving', 'category': 'Cryptocurrency'},
+               {'name': 'Holidays', 'url': 'https://b', 'description': 'UK bank holiday dates', 'category': 'Calendar'},
+               {'name': 'CoinCap', 'url': 'https://c', 'description': 'Real-time crypto price data', 'category': 'Cryptocurrency'}]
+    main._embeddings.clear()
+    ranked = asyncio.run(main.semantic_rank(NS(embeddings=Embeddings()), entries, 'bitcoin crypto price'))
+    assert [e['name'] for e in ranked][0] == 'CoinCap'
+
+def test_dead_catalog_providers_are_skipped_but_curated_never_are(monkeypatch):
+    import main
+    from registry import GOLDEN
+    catalog_entry = {'name': 'CityAlert', 'url': 'https://cityalert.example/docs'}
+    main.mark_dead(catalog_entry, 'SSL error'); main.mark_dead(GOLDEN[0], 'transient')
+    assert main.is_dead(catalog_entry) and not main.is_dead(GOLDEN[0])
+    monkeypatch.setattr(main.time, 'monotonic', lambda: 10**12)  # 24 hours later
+    assert not main.is_dead(catalog_entry)
+
+def test_sample_keeps_fields_after_huge_lists():
+    """PokéAPI lists hundreds of moves before stats; the model must still see the stats."""
+    from main import readable
+    pikachu = {'moves': [{'move': {'name': 'thunder-shock', 'url': 'https://pokeapi.co/api/v2/move/84/'}, 'version_group_details': [{'level_learned_at': 1}] * 5}] * 120,
+               'name': 'pikachu', 'stats': [{'base_stat': 90, 'stat': {'name': 'speed'}}]}
+    text = readable(json.dumps(pikachu), 'application/json')
+    assert '"stats"' in text and '"base_stat": 90' in text and len(text) <= 16000
+
+def test_curated_provider_runs_first_without_scraping_docs(monkeypatch):
+    import asyncio, main
+    monkeypatch.setenv('OPENAI_API_KEY', 'test')
+    attempts = []
+    async def catalog(): return [{'name': 'Bitcoin Halving', 'url': 'https://halving.example/', 'description': 'Countdown', 'category': 'Cryptocurrency'}]
+    async def public_get(url, providers=()): raise AssertionError('curated docs must not be scraped')
+    async def semantic_rank(ai, entries, query, limit=22): return entries
+    async def get_api_data(ai, entry, docs, question, trace, providers):
+        attempts.append((entry['name'], providers))
+        payload = {'bitcoin': {'usd': 67000.5}}
+        return 'https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd', json.dumps(payload), payload
+    async def json_model(ai, model, system, prompt, budget=1400):
+        if system.startswith('Translate'): return {'search_terms': ['bitcoin', 'price'], 'category': 'Cryptocurrency', 'topic': 'crypto'}
+        if system.startswith('Strict analyst'): return {'answerable': True, 'summary': 'BTC'}
+        return {'title': 'Bitcoin', 'summary': 'Bitcoin is $67000.5.', 'blocks': [{'type': 'text', 'content': 'x'}]}
+    for name, fn in [('catalog', catalog), ('public_get', public_get), ('semantic_rank', semantic_rank), ('get_api_data', get_api_data), ('json_model', json_model)]:
+        monkeypatch.setattr(main, name, fn)
+    result = asyncio.run(main.explore('What is the current Bitcoin price?'))
+    assert result['verified'] and result['provider']['name'] == 'CoinGecko'
+    assert attempts[0][0] == 'CoinGecko' and 'https://api.coingecko.com' in attempts[0][1]

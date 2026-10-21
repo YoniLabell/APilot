@@ -19,11 +19,14 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from registry import TOPICS, golden_by_name, golden_for
 from validation import describe_facts, payload_facts, period_problem, validate_api_payload, verify_ui_numbers
 
 CATALOG_URL = 'https://raw.githubusercontent.com/public-apis/public-apis/master/README.md'
 AGENT_MODEL = os.getenv('AGENT_MODEL', 'gpt-4.1-mini')
 UI_MODEL = os.getenv('UI_MODEL', 'gpt-4.1-mini')
+EMBED_MODEL = os.getenv('EMBED_MODEL', 'text-embedding-3-small')
+DEAD_FOR = 24*3600  # Seconds to skip a catalog provider whose docs could not be read.
 app = FastAPI(title='APilot API', version='0.1', docs_url='/api/docs', openapi_url='/api/openapi.json')
 _catalog: list[dict] = []
 _last_load = 0.0
@@ -141,12 +144,17 @@ def readable(body: str, content_type: str, limit: int = 16000) -> str:
         return soup.get_text(' ',strip=True)[:limit]
     try:
         payload=json.loads(body)
-        def sample(v,depth=0):
+        def sample(v,cap,depth=0):
             if depth>6: return '[nested]'
-            if isinstance(v,list): return [sample(x,depth+1) for x in v[:65]]
-            if isinstance(v,dict): return {str(k):sample(x,depth+1) for k,x in list(v.items())[:55]}
+            if isinstance(v,list): return [sample(x,cap,depth+1) for x in v[:cap]]
+            if isinstance(v,dict): return {str(k):sample(x,cap,depth+1) for k,x in list(v.items())[:55]}
             return v
-        return json.dumps(sample(payload),ensure_ascii=False,default=str)[:limit]
+        # Shorten long lists until every key fits, so fields after a huge list stay visible
+        # (PokéAPI puts "stats" after hundreds of "moves").
+        for cap in (65,20,8,3):
+            text=json.dumps(sample(payload,cap),ensure_ascii=False,default=str)
+            if len(text)<=limit: return text
+        return text[:limit]
     except (ValueError,TypeError): return body[:limit]
 
 
@@ -182,10 +190,44 @@ def ranked(entries: list[dict], words: list[str], category: str) -> list[dict]:
     return sorted((e for e in entries if score(e)>0),key=lambda e:-score(e))[:22]
 
 
+def sampling(model: str) -> dict:
+    """Temperature 0 for repeatable answers; reasoning models (o-series, gpt-5) reject the parameter."""
+    return {} if model.startswith(('o1','o3','o4','gpt-5')) else {'temperature':0}
+
+
+_embeddings: dict[str,list[float]] = {}
+
+
+async def semantic_rank(ai, entries: list[dict], query: str, limit: int = 22) -> list[dict]:
+    """Rank catalog entries by embedding similarity of their DESCRIPTION (names are often misleading)."""
+    async def embed(texts: list[str]) -> list[list[float]]:
+        out=await ai.embeddings.create(model=EMBED_MODEL,input=texts,dimensions=256)
+        return [d.embedding for d in out.data]
+    missing=[e for e in entries if e['url'] not in _embeddings]
+    for i in range(0,len(missing),1000):
+        batch=missing[i:i+1000]
+        for e,vector in zip(batch,await embed([f"{e['description']} ({e['category']})" for e in batch])): _embeddings[e['url']]=vector
+    q=(await embed([query]))[0]
+    score=lambda e: sum(a*b for a,b in zip(q,_embeddings[e['url']]))  # OpenAI embeddings are unit length.
+    return sorted(entries,key=lambda e:(-score(e),e['name']))[:limit]
+
+
+_dead: dict[str,tuple[float,str]] = {}
+
+
+def is_dead(entry: dict) -> bool:
+    until=_dead.get(entry['url'],(0.0,''))[0]
+    return time.monotonic()<until
+
+
+def mark_dead(entry: dict, reason: str) -> None:
+    if 'docs' not in entry: _dead[entry['url']]=(time.monotonic()+DEAD_FOR,reason)  # Golden providers are never skipped.
+
+
 async def json_model(ai, model: str, system: str, prompt: str, budget: int = 1400) -> dict:
     result=await ai.chat.completions.create(model=model,
       messages=[{'role':'system','content':system+' Return only one valid JSON object.'},{'role':'user','content':prompt}],
-      response_format={'type':'json_object'},max_completion_tokens=budget)
+      response_format={'type':'json_object'},max_completion_tokens=budget,**sampling(model))
     value=json.loads(result.choices[0].message.content or '{}')
     if not isinstance(value,dict): raise ValueError('Model returned invalid JSON')
     return value
@@ -226,7 +268,7 @@ async def get_api_data(ai, entry: dict, docs: str, question: str, trace: list, p
     # Every round must call the tool, so a failed request is retried with a fix rather than abandoned.
     for _ in range(AGENT_ROUNDS):
         out=await ai.chat.completions.create(model=AGENT_MODEL,messages=msgs,tools=tool,
-             tool_choice='required', max_completion_tokens=1300)
+             tool_choice='required', max_completion_tokens=1300, **sampling(AGENT_MODEL))
         m=out.choices[0].message
         msgs.append(m.model_dump(exclude_none=True))
         if not m.tool_calls: break
@@ -307,11 +349,13 @@ async def explore(question: str, preferred: str='', listener=None) -> dict:
     trace=Trace(listener); entries=await catalog()
     log(trace,'CATALOG',f'{len(entries)} no-auth HTTPS APIs indexed','Source: public-apis/public-apis')
     if preferred:
-        entry=next((e for e in entries if e['name'].lower()==preferred.lower()),None)
+        entry=golden_by_name(preferred) or next((e for e in entries if e['name'].lower()==preferred.lower()),None)
         if entry is None: raise ValueError('Requested Roulette API not in catalog')
         candidates=[entry]
     else:
-        keys=await json_model(ai,AGENT_MODEL,'Translate questions to ENGLISH API search keywords. Respond with English text only. JSON keys: search_terms (array), category (string).',question,300)
+        topics=', '.join(TOPICS)
+        keys=await json_model(ai,AGENT_MODEL,'Translate questions to ENGLISH API search keywords. Respond with English text only. '
+            f'JSON keys: search_terms (array), category (string), topic (one of: {topics}, other).',question,300)
         keywords=[str(x) for x in keys.get('search_terms',[]) if isinstance(x,str)][:7]
         hints={'bitcoin':['cryptocurrency','bitcoin','blockchain','coin'],
                'spacex':['space','rocket','launch'],
@@ -323,26 +367,43 @@ async def explore(question: str, preferred: str='', listener=None) -> dict:
         for term,extra in hints.items():
             if term in question.lower(): keywords.extend(extra)
         keywords=list(dict.fromkeys(keywords))[:13]
-        candidate_list=ranked(entries,keywords,str(keys.get('category','')))
         log(trace,'DISCOVERY','LLM translated the question into catalog keywords',', '.join(keywords))
-        if not candidate_list: raise ValueError('No matching no-auth HTTPS API found')
-        choice=await json_model(ai,AGENT_MODEL,
-            'Choose reliable APIs matching the question. Prefer actual historical observations when asked for yesterday. JSON key: indexes (array of 3 integer indexes). Output English only.',
-            f'Question: {question}\nCandidates: {json.dumps(candidate_list,ensure_ascii=False)[:13500]}',350)
-        indices=[i for i in choice.get('indexes',[]) if isinstance(i,int) and 0<=i<len(candidate_list)]
-        candidates=[candidate_list[i] for i in dict.fromkeys(indices)]
-        candidates.extend(x for x in candidate_list if x not in candidates)
+        golden=golden_for(question,keywords,str(keys.get('topic','')))
+        if golden: log(trace,'DISCOVERY','Curated providers match this question',', '.join(g['name'] for g in golden))
+        golden_hosts={urlsplit(h).hostname for g in golden for h in (g['url'],*g['hosts'])}
+        live=[e for e in entries if not is_dead(e) and urlsplit(e['url']).hostname not in golden_hosts]
+        try: candidate_list=await semantic_rank(ai,live,f"{question} {' '.join(keywords)}")
+        except Exception as exc:
+            log(trace,'DISCOVERY','Semantic ranking unavailable; using keyword ranking',f'{type(exc).__name__}: {str(exc)[:200]}')
+            candidate_list=ranked(live,keywords,str(keys.get('category','')))
+        if golden:
+            candidates=golden+candidate_list  # Curated first; the catalog is the fallback.
+        else:
+            if not candidate_list: raise ValueError('No matching no-auth HTTPS API found')
+            choice=await json_model(ai,AGENT_MODEL,
+                'Choose reliable APIs matching the question. Prefer actual historical observations when asked for yesterday. JSON key: indexes (array of 3 integer indexes). Output English only.',
+                f'Question: {question}\nCandidates: {json.dumps(candidate_list,ensure_ascii=False)[:13500]}',350)
+            indices=[i for i in choice.get('indexes',[]) if isinstance(i,int) and 0<=i<len(candidate_list)]
+            candidates=[candidate_list[i] for i in dict.fromkeys(indices)]
+            candidates.extend(x for x in candidate_list if x not in candidates)
     errors=[]
     for entry in candidates[:5]:
         try:
             log(trace,'DOCUMENTATION',f'Reading documentation for {entry["name"]}',entry['url'])
-            text,typ,docs_url=await public_get(entry['url'])
-            if docs_url!=entry['url']: log(trace,'DOCUMENTATION','Documentation redirected',docs_url)
-            docs=readable(text,typ,14000)
-            api_origins=documented_api_links(text,typ)
-            if api_origins:
-                docs += '\nEXPLICIT DOCUMENTED API HOSTS: '+', '.join(api_origins)
-            if len(docs)<45: raise ValueError('Documentation missing or unreadable')
+            if 'docs' in entry:  # Curated provider: documentation and hosts are known.
+                docs,docs_url,api_origins=entry['docs'],entry['url'],tuple(entry['hosts'])
+            else:
+                try:
+                    text,typ,docs_url=await public_get(entry['url'])
+                    docs=readable(text,typ,14000)
+                    if len(docs)<45: raise ValueError('Documentation missing or unreadable')
+                except Exception as exc:
+                    mark_dead(entry,str(exc))
+                    raise
+                if docs_url!=entry['url']: log(trace,'DOCUMENTATION','Documentation redirected',docs_url)
+                api_origins=documented_api_links(text,typ)
+                if api_origins:
+                    docs += '\nEXPLICIT DOCUMENTED API HOSTS: '+', '.join(api_origins)
             url,data,payload=await get_api_data(ai,entry,docs,question,trace,(entry['url'],docs_url,*api_origins))
             # The models only see a sample of the JSON, so counts and aggregates come from code.
             computed=describe_facts(payload_facts(payload))
@@ -384,7 +445,7 @@ async def explore(question: str, preferred: str='', listener=None) -> dict:
                     log(trace,'RETRY','Dashboard figure not found in the data; redesigning',rejected)
             log(trace,'VALIDATION','Checked response flags and dashboard figures against returned JSON')
             log(trace,'DONE','Generated sourced interactive dashboard')
-            return {'verified':True,'ui':ui,'provider':entry,'source_url':url,'raw_excerpt':data[:12500],
+            return {'verified':True,'ui':ui,'provider':{k:entry.get(k,'') for k in ('name','url','description','category')},'source_url':url,'raw_excerpt':data[:12500],
                     'retrieved_at':datetime.now(timezone.utc).isoformat(),'trace':trace}
         except Exception as exc:
             reason=f'{entry["name"]}: {type(exc).__name__}: {str(exc)[:170]}'
