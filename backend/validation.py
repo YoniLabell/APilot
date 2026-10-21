@@ -94,9 +94,9 @@ def _source_numbers(value: Any, bag: list[float], depth: int = 0) -> None:
         for v in value[:1000]: _source_numbers(v, bag, depth + 1)
     elif isinstance(value, (float, int)) and not isinstance(value, bool) and math.isfinite(value):
         bag.append(float(value))
-    elif isinstance(value, str) and re.fullmatch(r'-?\d+(?:,\d{3})*(?:\.\d+)?', value.strip()):
-        try: bag.append(float(value.replace(',', '')))
-        except ValueError: pass
+    elif isinstance(value, str):
+        # Numbers inside text are sourced too, e.g. "place": "81 km SW of Port-Vila".
+        bag.extend(n for n, _ in _numeric_tokens(value[:500]))
 
 
 def _flatten(record: dict, prefix: str = '', depth: int = 0) -> dict[str, Any]:
@@ -104,6 +104,8 @@ def _flatten(record: dict, prefix: str = '', depth: int = 0) -> dict[str, Any]:
     for key, value in record.items():
         name = f'{prefix}{key}'
         if isinstance(value, dict) and depth < 2: out.update(_flatten(value, name + '.', depth + 1))
+        elif isinstance(value, list) and 0 < len(value) <= 4 and all(_is_number(v) for v in value):
+            out.update((f'{name}.{i}', v) for i, v in enumerate(value))  # e.g. coordinates [lon, lat, depth]
         elif not isinstance(value, (dict, list)): out[name] = value
     return out
 
@@ -219,6 +221,15 @@ def _date_is_known(parts: tuple[int | None, int | None, int | None], known: set[
     return any((year is None or d.year == year) and d.month == month and (day is None or d.day == day) for d in known)
 
 
+def _around(text: str, number: float) -> str:
+    """A short excerpt around a rejected number, so Agent X-Ray shows where it came from."""
+    for m in NUMBER.finditer(text):
+        try: hit = float(m.group(0).replace(',', '')) == number
+        except ValueError: hit = False
+        if hit: return ' '.join(text[max(0, m.start() - 40):m.end() + 40].split())
+    return ' '.join(text[:80].split())
+
+
 def verify_ui_numbers(ui: dict, payload: Any, question: str = '', today: date | None = None) -> None:
     """Reject invented numbers; permit sourced numbers, rounding and returned-record counts.
 
@@ -246,7 +257,7 @@ def verify_ui_numbers(ui: dict, payload: Any, question: str = '', today: date | 
             if precision == 0 and number in years: continue
             if not any(round(source, precision) == round(number, precision)
                        for source in observed):
-                raise ValueError(f'Dashboard contains an unverified number ({number:g})')
+                raise ValueError(f'Dashboard contains an unverified number ({number:g}) in "{_around(value, number)}"')
 
     for field in ('summary', 'subtitle'):
         require(str(ui.get(field) or ''))
