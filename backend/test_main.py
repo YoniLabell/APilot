@@ -1,3 +1,4 @@
+import json
 import pytest
 from fastapi.testclient import TestClient
 from main import app,parse_catalog,safe_host,same_provider,readable,clean_ui
@@ -96,3 +97,47 @@ def test_redirect_loop_stops(fake_web):
     routes['https://example.com/a']=redirect('/b')
     routes['https://example.com/b']=redirect('/a')
     with pytest.raises(ValueError,match='Too many redirects'): get('https://example.com/a')
+
+def test_error_reason_is_reported(fake_web):
+    import httpx
+    routes,get=fake_web
+    routes['https://api.example.com/v1/forecast?daily=rain']=lambda: httpx.Response(400,json={'error':True,'reason':'Timezone is required'})
+    with pytest.raises(ValueError,match='HTTP 400 Bad Request: .*Timezone is required'): get('https://api.example.com/v1/forecast?daily=rain')
+
+class FakeAgent:
+    """Stands in for the OpenAI client: requests each URL in turn and records what it was shown."""
+    def __init__(self,urls):
+        self.urls=list(urls); self.seen=[]
+        self.chat=self; self.completions=self
+    async def create(self,messages,**kwargs):
+        from types import SimpleNamespace as NS
+        self.seen.append([m for m in messages if m.get('role')=='tool'])
+        assert kwargs['tool_choice']=='required'
+        url=self.urls.pop(0)
+        call=NS(id=f'call{len(self.seen)}',function=NS(arguments=json.dumps({'url':url})))
+        msg=NS(tool_calls=[call],model_dump=lambda **_: {'role':'assistant','tool_calls':[{'id':call.id,'type':'function','function':{'name':'http_get','arguments':call.function.arguments}}]})
+        return NS(choices=[NS(message=msg)])
+
+def test_agent_recovers_from_bad_parameters(fake_web):
+    """The Open-Meteo failure: a 400 with a reason must reach the model, which then fixes the request."""
+    import asyncio, httpx, main
+    routes,_=fake_web
+    bad='https://api.open-meteo.com/v1/forecast?latitude=19.4&longitude=-99.1&daily=precipitation_sum&past_days=1'
+    good=bad+'&timezone=America%2FMexico_City'
+    routes[bad]=lambda: httpx.Response(400,json={'error':True,'reason':'Timezone is required'})
+    routes[good]=lambda: httpx.Response(200,json={'daily':{'time':['2026-10-20'],'precipitation_sum':[4.2]}})
+    agent=FakeAgent([bad,good])
+    url,data=asyncio.run(main.get_api_data(agent,{'name':'Open-Meteo','url':'https://open-meteo.com/'},'docs',
+        'How much rain fell in Mexico City yesterday?',main.Trace(),('https://open-meteo.com/',)))
+    assert url==good and '4.2' in data
+    assert 'Timezone is required' in agent.seen[1][0]['content']
+
+def test_agent_gives_up_after_bounded_rounds(fake_web):
+    import asyncio, httpx, main
+    routes,_=fake_web
+    urls=[f'https://api.example.com/x?try={i}' for i in range(main.AGENT_ROUNDS)]
+    for u in urls: routes[u]=lambda: httpx.Response(404,text='Not found')
+    agent=FakeAgent(urls)
+    with pytest.raises(ValueError,match='no valid JSON'):
+        asyncio.run(main.get_api_data(agent,{'name':'X','url':'https://example.com/'},'docs','q?',main.Trace(),('https://example.com/',)))
+    assert len(agent.seen)==main.AGENT_ROUNDS
