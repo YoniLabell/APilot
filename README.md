@@ -64,7 +64,9 @@ APilot uses a **fail-closed** result pipeline: a JSON response alone does not pr
 
 1. Reject `success: false`, `status: error`, deprecation messages, non-JSON responses and empty result collections.
 2. Ask the analyst model whether the returned data actually covers the requested metric, geography and period. If not, try another API.
-3. Reject dashboard numbers that are absent from the returned JSON. Displayed rounding and exact record counts are allowed.
+3. Reject dashboard numbers that are absent from the returned JSON. Displayed rounding is allowed.
+   - The models see only a truncated sample of the response. Counts, totals, averages, minimums and maximums are therefore computed by code from the full response, given to the models as **computed facts**, and accepted by the check. A count the model works out itself is a guess and is rejected.
+   - If a dashboard contains an unsourced number, the design model gets one chance to redesign it, told exactly which number failed. A second failure moves on to the next provider.
    - Dates are checked as dates, not as measurements. A date passes if the JSON contains it (as a date string or an epoch timestamp), or if it falls between 8 days ago and tomorrow, which covers "today", "yesterday" and "past week" in any time zone. Any other date is rejected.
    - Times of day such as `14:00` are treated as labels.
 4. Only then return `verified: true` to the UI. The frontend refuses to show older, unverified saved results as live dashboards.
