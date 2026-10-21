@@ -13,7 +13,8 @@ APilot is an experimental **English-only** full-stack application powered by Ope
 - Documentation reading and constrained, read-only API tool calls.
 - Analyst stage that summarizes returned JSON and identifies data limitations.
 - Separate **Generative UI** stage that returns JSON dashboard definitions — not executable AI-generated HTML or JavaScript.
-- Responsive React UI with cards, charts, tables, a results popup, and **Agent X-Ray**.
+- Responsive React UI with cards, charts, sortable tables, a results popup, and **Agent X-Ray** streamed live while the agent works (with cancel).
+- Export dashboards as PNG or JSON; search, refresh and delete saved dashboards.
 - API Roulette (random provider experiments) and browser-local saved dashboards.
 - Optional site access passphrase to reduce misuse of your OpenAI API credits.
 - Dockerfile and Render blueprint, plus GitHub Actions checks.
@@ -72,9 +73,12 @@ If OpenAI rejects requests, verify API billing, available model access, and envi
 ## Key internals
 
 - `backend/main.py`: catalog parsing, provider ranking, OpenAI orchestration, constrained GET tool, UI schema sanitizer, API.
-- `frontend/src/App.tsx`: interface, popup renderer, charts, X-Ray, saved results.
-- `frontend/src/styles.css`: responsive design.
-- `backend/test_main.py`: no-auth filter and safety regression tests.
+  `POST /api/ask/stream` streams Agent X-Ray events as Server-Sent Events while the agent works; `POST /api/ask` returns only the final result.
+- `frontend/src/App.tsx`: app state, asking (live stream with a fallback to estimated progress), saved results.
+- `frontend/src/components/`: sidebar, explore page, live progress panel, result dialog, dashboard blocks, JSON viewer, toast.
+- `frontend/src/lib/`: API client and SSE parser, progress stages, formatting, safe browser storage, dialog behaviour.
+- `frontend/src/styles.css`: design tokens and responsive design.
+- `backend/test_main.py`: no-auth filter, safety, chart sanitizing and streaming tests.
 
 ### Security and limitations
 
