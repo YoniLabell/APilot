@@ -15,15 +15,17 @@ MONTH = (r'(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug
          r'sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?')
 MONTHS = {m: i for i, m in enumerate(('jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'), 1)}
 DATE_PATTERNS = (  # Each yields (kind, regex); groups are read by _dates_in.
-    ('iso', re.compile(r'(?<![\w.])(\d{4})-(\d{1,2})-(\d{1,2})(?:[T ]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?![\w.])')),
-    ('mdy', re.compile(r'\b' + MONTH + r'\s+(\d{1,2})(?:st|nd|rd|th)?(?:\s*[-\u2013\u2014]\s*(\d{1,2})(?:st|nd|rd|th)?)?(?:,?\s+(\d{4}))?(?![\w.])', re.I)),
-    ('dmy', re.compile(r'(?<![\w.])(\d{1,2})(?:st|nd|rd|th)?\s+' + MONTH + r'(?:,?\s+(\d{4}))?(?![\w.])', re.I)),
-    ('my', re.compile(r'\b' + MONTH + r',?\s+(\d{4})(?![\w.])', re.I)),
-    ('slash', re.compile(r'(?<![\w.])(\d{1,2})[/.](\d{1,2})[/.](\d{4})(?![\w.])')),
-    ('time', re.compile(r'(?<![\w.])\d{1,2}:\d{2}(?::\d{2})?(?:\s?[ap]\.?m\.?)?(?![\w.])', re.I)),
+    ('iso', re.compile(r'(?<![\w.])(\d{4})-(\d{1,2})-(\d{1,2})(?:[T ]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?!\w|\.\d)')),
+    ('mdy', re.compile(r'\b' + MONTH + r'\s+(\d{1,2})(?:st|nd|rd|th)?(?:\s*[-\u2013\u2014]\s*(\d{1,2})(?:st|nd|rd|th)?)?(?:,?\s+(\d{4}))?(?!\w|\.\d)', re.I)),
+    ('dmy', re.compile(r'(?<![\w.])(\d{1,2})(?:st|nd|rd|th)?\s+' + MONTH + r'(?:,?\s+(\d{4}))?(?!\w|\.\d)', re.I)),
+    ('my', re.compile(r'\b' + MONTH + r',?\s+(\d{4})(?!\w|\.\d)', re.I)),
+    ('slash', re.compile(r'(?<![\w.])(\d{1,2})[/.](\d{1,2})[/.](\d{4})(?!\w|\.\d)')),
+    ('time', re.compile(r'(?<![\w.])\d{1,2}:\d{2}(?::\d{2})?(?:\s?[ap]\.?m\.?)?(?!\w|\.\d)', re.I)),
 )
 TIME_KEY = re.compile(r'(time|date|updated|generated|created|_at$|^dt$|timestamp)', re.I)
-NUMBER = re.compile(r'(?<![\w.])-?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?:[eE][+-]?\d+)?(?![\w.])')
+# Patterns end with (?!\w|\.\d): a decimal point stops a match, but a sentence-ending period
+# does not, so "Total: 99." is still checked.
+NUMBER = re.compile(r'(?<![\w.])-?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?:[eE][+-]?\d+)?(?!\w|\.\d)')
 
 
 def _empty(value: Any) -> bool:

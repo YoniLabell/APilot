@@ -84,3 +84,16 @@ def test_dates_from_payload_or_question_period_are_allowed(ui, payload):
 def test_invented_dates_and_numbers_still_rejected(ui, payload, match):
     with pytest.raises(ValueError, match=match):
         verify_ui_numbers({'blocks': [], **ui}, payload, today=TODAY)
+
+
+def test_number_before_full_stop_is_checked():
+    # Regression: "(?![\w.])" skipped any number followed by a period, so this invented total passed.
+    with pytest.raises(ValueError, match=r'unverified number \(99\)'):
+        verify_ui_numbers({'summary': 'Total: 99.', 'blocks': []}, RATES, today=TODAY)
+
+
+@pytest.mark.parametrize('text', [
+    'The rate is 0.92.', 'Rates as of October 21, 2026.', 'Published 2026-10-20.', 'Updated at 16:00.', 'Ends... 151.37...',
+])
+def test_real_values_and_dates_at_sentence_end_pass(text):
+    verify_ui_numbers({'summary': text, 'blocks': []}, RATES, today=TODAY)
