@@ -71,18 +71,19 @@ APilot uses a **fail-closed** result pipeline: a JSON response alone does not pr
 
 1. Reject `success: false`, `status: error`, deprecation messages, non-JSON responses and empty result collections.
 2. Ask the analyst model whether the returned data actually covers the requested metric, geography and period. If not, try another API.
-3. Reject dashboard numbers that are absent from the returned JSON. Displayed rounding is allowed, and so are scaled forms at the displayed precision: 136410000000 may appear as `$136.4B`, and 0.0523 as `5.2%`. Numbers in the request URL (e.g. `date=2004:2023`) count as sourced.
+3. Check every dashboard number against the returned JSON. Displayed rounding is allowed, and so are scaled forms at the displayed precision: 136410000000 may appear as `$136.4B`, and 0.0523 as `5.2%`. Numbers in the request URL (e.g. `date=2004:2023`) count as sourced.
    - The models see only a truncated sample of the response. Counts, totals, averages, minimums and maximums are therefore computed by code from the full response, given to the models as **computed facts**, and accepted by the check. A count the model works out itself is a guess and is rejected.
-   - If a dashboard contains an unsourced number, the design model gets one chance to redesign it, told exactly which number failed. A second failure moves on to the next provider.
+   - A figure that cannot be tied to the data is **hidden and flagged**, rather than failing the whole question. A chart with any unsupported value is removed. The dashboard lists these under *Data quality notice*, and Agent X-Ray records them.
+   - For earthquake questions with a magnitude threshold, counts are computed from the returned events (not the feed's `metadata.count`), and a wrong stated count is corrected and flagged.
    - Dates are checked as dates, not as measurements. A date passes if the JSON contains it (as a date string or an epoch timestamp), or if it falls between 8 days ago and tomorrow, which covers "today", "yesterday" and "past week" in any time zone. Any other date is rejected.
    - Times of day such as `14:00` are treated as labels.
-4. Only then return `verified: true` to the UI. The frontend refuses to show older, unverified saved results as live dashboards.
+4. Return `verified: true` with any `validation_warnings` to the UI. The frontend refuses to show older, unverified saved results as live dashboards.
 5. When every provider fails, show an error instead of an invented dashboard. Agent X-Ray includes the reason for each retry.
 
 **Limits of verification:**
 - `verified: true` means the response passed automated provenance checks. It does not mean the measurements were independently audited.
 - The numeric check can also reject some legitimate transformations, and the model can misinterpret complex responses.
-- The checks deliberately prefer false negatives over fabricated dashboards.
+- The checks deliberately prefer hiding a legitimate figure over showing a fabricated one.
 
 ## Example questions
 
