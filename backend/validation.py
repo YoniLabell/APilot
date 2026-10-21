@@ -354,9 +354,11 @@ def audit_dashboard(ui: dict, payload: Any, question: str = '') -> list[str]:
         # For narrative sentences, only numbers directly preceding a count noun
         # are considered totals; magnitude, date and depth figures remain intact.
         def replace(m: re.Match) -> str:
-            # "Magnitude 6 earthquake" is not a six-event count.
+            # "Magnitude 6 earthquake" is a magnitude, not a count of six events.
             prefix = value[max(0, m.start() - 16):m.start()]
-            if re.search(r'(?:magnitude|mag|M)\s*
+            if re.search(r'(?:magnitude|mag|M)\s*$', prefix, re.I):
+                return m.group(0)
+            stated = int(m[1].replace(',', ''))
             actual = int(scope['matched_count'])
             if stated != actual:
                 warning(f"Corrected a magnitude >= {scope['minimum_magnitude']:g} earthquake count "
