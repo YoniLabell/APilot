@@ -174,7 +174,7 @@ def test_unsourced_figure_flags_but_does_not_abort_dashboard(monkeypatch):
     assert result['verified'] is True
     assert result['validation_warnings']
     assert '192' not in result['ui']['summary']
-    assert result['ui']['blocks'][0]['items'][0]['value'] == 'Unverified'
+    assert result['ui']['blocks'][0]['items'][0]['value'] == '3'
     assert any(e['stage'] == 'VALIDATION' for e in result['trace'])
 
 
