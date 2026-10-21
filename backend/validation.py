@@ -96,9 +96,9 @@ def earthquake_scope_count(payload: Any, question: str) -> dict[str, float | int
     if not re.search(r'earthquakes?|quakes?|seismic', question, re.I):
         return None
     match = re.search(
-        r'\\bmagnitude\\s*(?:of\\s*)?(\\d+(?:\\.\\d+)?)\\s*(?:or\\s+(?:more|higher|greater)|and\\s+above|\\+)|'
-        r'\\b(?:at\\s+least|above)\\s+magnitude\\s*(\\d+(?:\\.\\d+)?)|'
-        r'\\bM\\s*(\\d+(?:\\.\\d+)?)\\s*\\+',
+        r'\bmagnitude\s*(?:of\s*)?(\d+(?:\.\d+)?)\s*(?:or\s+(?:more|higher|greater)|and\s+above|\+)|'
+        r'\b(?:at\s+least|above)\s+magnitude\s*(\d+(?:\.\d+)?)|'
+        r'\bM\s*(\d+(?:\.\d+)?)\s*\+',
         question, re.I)
     if not match:
         return None
@@ -335,7 +335,7 @@ def audit_dashboard(ui: dict, payload: Any, question: str = '') -> list[str]:
             return value
         # Statistics and table cells with a count label identify their metric
         # directly, rather than relying on a surrounding paragraph.
-        matched = re.fullmatch(r'\\s*(\\d[\\d,]*)\\s*(?:events?|earthquakes?|quakes?)?\\s*', value, re.I)
+        matched = re.fullmatch(r'\s*(\d[\d,]*)\s*(?:events?|earthquakes?|quakes?)?\s*', value, re.I)
         if matched:
             number = int(matched[1].replace(',', ''))
             actual = int(scope['matched_count'])
@@ -352,7 +352,7 @@ def audit_dashboard(ui: dict, payload: Any, question: str = '') -> list[str]:
                 warning(f"Corrected a magnitude >= {scope['minimum_magnitude']:g} earthquake count "
                         f"from {stated} to {actual} using the returned feature records.")
             return str(actual) + m[2]
-        return re.sub(r'\\b(\\d[\\d,]*)((?:\\s+|\\s+M\\d+(?:\\.\\d+)?\\+\\s+)(?:earthquakes?|quakes?|events?))\\b',
+        return re.sub(r'\b(\d[\d,]*)((?:\s+|\s+M\d+(?:\.\d+)?\+\s+)(?:earthquakes?|quakes?|events?))\b',
                       replace, value, flags=re.I)
 
     def checked(value: str, label: str, fallback: str = 'Unverified') -> str:
