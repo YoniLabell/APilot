@@ -10,6 +10,7 @@ export type Block = Stats | Chart | Table | TextBlock
 export type Provider = {name: string; url: string; description: string; category: string}
 
 export type Answer = {
+  verified: boolean
   ui: {title: string; subtitle: string; summary: string; caveat: string; blocks: Block[]}
   provider: Provider
   source_url: string

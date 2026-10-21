@@ -127,9 +127,9 @@ def test_agent_recovers_from_bad_parameters(fake_web):
     routes[bad]=lambda: httpx.Response(400,json={'error':True,'reason':'Timezone is required'})
     routes[good]=lambda: httpx.Response(200,json={'daily':{'time':['2026-10-20'],'precipitation_sum':[4.2]}})
     agent=FakeAgent([bad,good])
-    url,data=asyncio.run(main.get_api_data(agent,{'name':'Open-Meteo','url':'https://open-meteo.com/'},'docs',
+    url,data,payload=asyncio.run(main.get_api_data(agent,{'name':'Open-Meteo','url':'https://open-meteo.com/'},'docs',
         'How much rain fell in Mexico City yesterday?',main.Trace(),('https://open-meteo.com/',)))
-    assert url==good and '4.2' in data
+    assert url==good and '4.2' in data and payload['daily']['precipitation_sum']==[4.2]
     assert 'Timezone is required' in agent.seen[1][0]['content']
 
 def test_agent_gives_up_after_bounded_rounds(fake_web):

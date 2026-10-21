@@ -9,7 +9,7 @@ jobs:
         with:
           python-version: '3.11'
       - run: pip install -r backend/requirements.txt pytest
-      - run: pytest -q backend/test_main.py
+      - run: pytest -q backend
   frontend:
     runs-on: ubuntu-latest
     steps:

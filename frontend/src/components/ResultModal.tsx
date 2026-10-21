@@ -69,6 +69,16 @@ export function ResultModal({answer, question, saved, onClose, onSave, onRefresh
     {id: 'json', label: 'Raw JSON', icon: FileJson},
   ]
 
+  if (answer.verified !== true) {
+    return <div className="overlay" onClick={onClose}>
+      <div className="popup" ref={dialog} tabIndex={-1} onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Unverified result">
+        <header className="popup-head"><div className="popup-title"><h2>Unverified saved result</h2></div>
+          <button className="icon-btn" onClick={onClose} aria-label="Close"><X size={20}/></button></header>
+        <div className="popup-body"><div className="warning"><ShieldCheck size={18}/>
+          <span>This older result has no verified API provenance and cannot be displayed as live data. Run the question again.</span></div></div>
+      </div>
+    </div>
+  }
   return <div className="overlay" onClick={onClose}>
     <div className="popup" ref={dialog} tabIndex={-1} onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="result-title">
       <header className="popup-head">
@@ -93,7 +103,7 @@ export function ResultModal({answer, question, saved, onClose, onSave, onRefresh
       <div className="popup-body" role="tabpanel">
         {tab === 'dashboard' && <div className="dashboard" ref={capture}>
           <div className="result-meta">
-            <span className="source-badge"><CheckCircle2 size={14}/> Live API data</span>
+            <span className="source-badge"><CheckCircle2 size={14}/> Validated API response</span>
             <span className="meta-chip"><Database size={13}/> {answer.provider.name}</span>
             {answer.provider.category && <span className="meta-chip">{answer.provider.category}</span>}
           </div>
