@@ -168,19 +168,24 @@ def _explore_with(monkeypatch, dashboards):
         monkeypatch.setattr(main, name, fn)
     return asyncio.run(main.explore('Magnitude 5+ earthquakes in the past week?', 'USGS')), prompts
 
-def test_dashboard_with_unsourced_number_is_redesigned_once(monkeypatch):
-    invented = {'title': 'Quakes', 'summary': '192 earthquakes this week.', 'blocks': [{'type': 'text', 'content': 'x'}]}
-    fixed = {'title': 'Quakes', 'summary': '3 earthquakes; strongest 6.4.', 'blocks': [{'type': 'text', 'content': 'x'}]}
-    result, prompts = _explore_with(monkeypatch, [invented, fixed])
-    assert result['verified'] and result['ui']['summary'].startswith('3 earthquakes')
-    assert 'COMPUTED FACTS' in prompts[0] and 'features: 3 records' in prompts[0]
-    assert 'REJECTED: Dashboard contains an unverified number (192)' in prompts[-1]
-    assert any(e['stage'] == 'RETRY' and '192' in e['detail'] for e in result['trace'])
+def test_unsourced_figure_flags_but_does_not_abort_dashboard(monkeypatch):
+    invented = {'title': 'Quakes', 'summary': '192 earthquakes this week.',
+                'blocks': [{'type': 'stats', 'items': [{'label': 'Total earthquakes', 'value': '192'}]}]}
+    result, _ = _explore_with(monkeypatch, [invented])
+    assert result['verified'] is True
+    assert result['validation_warnings']
+    assert '192' not in result['ui']['summary']
+    assert result['ui']['blocks'][0]['items'][0]['value'] == '3'
+    assert any(e['stage'] == 'VALIDATION' for e in result['trace'])
 
-def test_dashboard_still_failing_after_redesign_is_rejected(monkeypatch):
-    invented = {'title': 'Quakes', 'summary': '192 earthquakes this week.', 'blocks': [{'type': 'text', 'content': 'x'}]}
-    with pytest.raises(ValueError, match='unverified number'):
-        _explore_with(monkeypatch, [dict(invented), dict(invented)])
+
+def test_unsourced_dashboard_stays_visible_with_caveat(monkeypatch):
+    invented = {'title': 'Quakes', 'summary': '192 earthquakes this week.',
+                'blocks': [{'type': 'text', 'title': 'Overview', 'content': 'No numeric data here.'}]}
+    result, _ = _explore_with(monkeypatch, [invented])
+    assert result['verified'] is True
+    assert result['validation_warnings']
+    assert result['ui']['blocks'][0]['content'] == 'No numeric data here.'
 
 def test_agent_is_told_to_use_a_forecast_for_a_forecast_question(fake_web):
     """QA P0-1: the agent must not answer a forecast question from the archive."""

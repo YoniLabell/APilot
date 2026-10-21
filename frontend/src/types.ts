@@ -11,6 +11,7 @@ export type Provider = {name: string; url: string; description: string; category
 
 export type Answer = {
   verified: boolean
+  validation_warnings?: string[]
   ui: {title: string; subtitle: string; summary: string; caveat: string; blocks: Block[]}
   provider: Provider
   source_url: string
